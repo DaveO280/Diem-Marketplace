@@ -1,0 +1,22 @@
+{
+  "name": "dacn-contracts",
+  "version": "0.1.0",
+  "description": "Smart contracts for DIEM Agent Credit Network",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy:testnet": "hardhat run deploy.js --network baseSepolia",
+    "deploy:mainnet": "hardhat run deploy.js --network baseMainnet",
+    "verify:testnet": "hardhat verify --network baseSepolia",
+    "verify:mainnet": "hardhat verify --network baseMainnet",
+    "node": "hardhat node"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "dotenv": "^16.3.1",
+    "hardhat": "^2.19.0"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.0.0"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "name": "dacn-provider-cli",
+  "version": "0.1.0",
+  "description": "CLI for DIEM Agent Credit Network providers",
+  "main": "provider-cli.js",
+  "bin": {
+    "dacn-provider": "./provider-cli.js"
+  },
+  "scripts": {
+    "start": "node provider-cli.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "venice",
+    "diem",
+    "api",
+    "marketplace",
+    "ai",
+    "agents"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "commander": "^11.0.0",
+    "ethers": "^5.7.0",
+    "inquirer": "^9.0.0"
+  }
+}
