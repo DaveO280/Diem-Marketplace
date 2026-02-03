@@ -65,6 +65,7 @@ contract DiemCreditEscrow {
         address consumer;
         uint256 amount;
         uint256 diemLimit;
+        uint256 duration;       // Escrow duration in seconds
         uint256 startTime;
         uint256 endTime;
         Status status;
@@ -156,6 +157,7 @@ contract DiemCreditEscrow {
             consumer: msg.sender,
             amount: _amount,
             diemLimit: _diemLimit,
+            duration: duration,    // Store the calculated duration
             startTime: 0,
             endTime: 0,
             status: Status.Pending,
@@ -179,7 +181,7 @@ contract DiemCreditEscrow {
         require(usdc.transferFrom(msg.sender, address(this), escrow.amount), "Transfer failed");
 
         escrow.startTime = block.timestamp;
-        escrow.endTime = block.timestamp + defaultDuration;
+        escrow.endTime = block.timestamp + escrow.duration;  // Use stored duration
         escrow.status = Status.Funded;
 
         emit EscrowFunded(_escrowId, escrow.amount);

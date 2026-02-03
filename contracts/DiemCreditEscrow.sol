@@ -36,6 +36,7 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         address consumer;
         uint256 amount;           // Total USDC amount (6 decimals)
         uint256 diemLimit;        // DIEM credit limit (in cents, 1 DIEM = 100)
+        uint256 duration;         // Escrow duration in seconds
         uint256 startTime;
         uint256 endTime;
         Status status;
@@ -137,6 +138,7 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
             consumer: msg.sender,
             amount: _amount,
             diemLimit: _diemLimit,
+            duration: duration,    // Store the calculated duration
             startTime: 0,  // Set on funding
             endTime: 0,
             status: Status.Pending,
@@ -172,7 +174,7 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         );
         
         escrow.startTime = block.timestamp;
-        escrow.endTime = block.timestamp + defaultDuration;
+        escrow.endTime = block.timestamp + escrow.duration;  // Use stored duration
         escrow.status = Status.Funded;
         
         emit EscrowFunded(_escrowId, escrow.amount);
