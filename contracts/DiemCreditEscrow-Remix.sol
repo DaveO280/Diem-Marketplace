@@ -1,28 +1,175 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "./TimelockController.sol";
-
 /**
- * @title DiemCreditEscrow
+ * @title DiemCreditEscrow (Remix-Compatible Flattened Version)
  * @notice Escrow contract for DIEM API credit marketplace
  * @dev Designed for Base network with USDC
+ *
+ * This version is flattened for Remix IDE deployment.
+ * All OpenZeppelin dependencies are inlined.
  */
+
+// ============ OpenZeppelin: Context ============
+abstract contract Context {
+    function _msgSender() internal view virtual returns (address) {
+        return msg.sender;
+    }
+
+    function _msgData() internal view virtual returns (bytes calldata) {
+        return msg.data;
+    }
+}
+
+// ============ OpenZeppelin: Ownable ============
+abstract contract Ownable is Context {
+    address private _owner;
+
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    constructor() {
+        _transferOwnership(_msgSender());
+    }
+
+    modifier onlyOwner() {
+        _checkOwner();
+        _;
+    }
+
+    function owner() public view virtual returns (address) {
+        return _owner;
+    }
+
+    function _checkOwner() internal view virtual {
+        require(owner() == _msgSender(), "Ownable: caller is not the owner");
+    }
+
+    function renounceOwnership() public virtual onlyOwner {
+        _transferOwnership(address(0));
+    }
+
+    function transferOwnership(address newOwner) public virtual onlyOwner {
+        require(newOwner != address(0), "Ownable: new owner is the zero address");
+        _transferOwnership(newOwner);
+    }
+
+    function _transferOwnership(address newOwner) internal virtual {
+        address oldOwner = _owner;
+        _owner = newOwner;
+        emit OwnershipTransferred(oldOwner, newOwner);
+    }
+}
+
+// ============ OpenZeppelin: ReentrancyGuard ============
+abstract contract ReentrancyGuard {
+    uint256 private constant _NOT_ENTERED = 1;
+    uint256 private constant _ENTERED = 2;
+
+    uint256 private _status;
+
+    constructor() {
+        _status = _NOT_ENTERED;
+    }
+
+    modifier nonReentrant() {
+        _nonReentrantBefore();
+        _;
+        _nonReentrantAfter();
+    }
+
+    function _nonReentrantBefore() private {
+        require(_status != _ENTERED, "ReentrancyGuard: reentrant call");
+        _status = _ENTERED;
+    }
+
+    function _nonReentrantAfter() private {
+        _status = _NOT_ENTERED;
+    }
+}
+
+// ============ OpenZeppelin: IERC20 ============
+interface IERC20 {
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+    function transfer(address to, uint256 amount) external returns (bool);
+    function allowance(address owner, address spender) external view returns (uint256);
+    function approve(address spender, uint256 amount) external returns (bool);
+    function transferFrom(address from, address to, uint256 amount) external returns (bool);
+}
+
+// ============ TimelockController ============
+abstract contract TimelockController is Ownable {
+
+    uint256 public constant TIMELOCK_DURATION = 24 hours;
+
+    struct Timelock {
+        uint256 executeTime;
+        bytes data;
+        bool executed;
+    }
+
+    mapping(bytes32 => Timelock) public timelocks;
+
+    event TimelockScheduled(bytes32 indexed id, uint256 executeTime);
+    event TimelockExecuted(bytes32 indexed id);
+    event TimelockCancelled(bytes32 indexed id);
+
+    modifier onlyTimelock(bytes32 _id) {
+        Timelock storage lock = timelocks[_id];
+        require(lock.executeTime > 0, "Timelock not scheduled");
+        require(block.timestamp >= lock.executeTime, "Timelock not ready");
+        require(!lock.executed, "Timelock already executed");
+        _;
+        lock.executed = true;
+        emit TimelockExecuted(_id);
+    }
+
+    function _schedule(bytes32 _id, bytes memory _data) internal {
+        require(timelocks[_id].executeTime == 0, "Already scheduled");
+
+        uint256 executeTime = block.timestamp + TIMELOCK_DURATION;
+        timelocks[_id] = Timelock({
+            executeTime: executeTime,
+            data: _data,
+            executed: false
+        });
+
+        emit TimelockScheduled(_id, executeTime);
+    }
+
+    function cancelTimelock(bytes32 _id) external onlyOwner {
+        require(timelocks[_id].executeTime > 0, "Not scheduled");
+        require(!timelocks[_id].executed, "Already executed");
+
+        delete timelocks[_id];
+        emit TimelockCancelled(_id);
+    }
+
+    function isTimelockReady(bytes32 _id) external view returns (bool) {
+        Timelock storage lock = timelocks[_id];
+        return lock.executeTime > 0 &&
+               block.timestamp >= lock.executeTime &&
+               !lock.executed;
+    }
+}
+
+// ============ DiemCreditEscrow ============
 contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
-    
+
     IERC20 public immutable usdc;
-    
+
     // Fee configuration (in basis points)
     uint256 public platformFeeBps = 100;      // 1%
     uint256 public unusedPenaltyBps = 500;    // 5%
     uint256 public constant BPS_DENOMINATOR = 10000;
-    
+
     // Default escrow duration (24 hours = DIEM epoch)
     uint256 public defaultDuration = 24 hours;
-    
-    enum Status { 
+
+    enum Status {
         Pending,      // Created, waiting for funding
         Funded,       // Consumer funded, provider should create key
         Active,       // Key delivered, in use
@@ -30,7 +177,7 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         Disputed,     // Dispute raised
         Refunded      // Refunded to consumer
     }
-    
+
     struct Escrow {
         address provider;
         address consumer;
@@ -44,15 +191,15 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         bool providerConfirmed;
         bool consumerConfirmed;
     }
-    
+
     mapping(bytes32 => Escrow) public escrows;
     mapping(address => uint256) public providerBalances;  // Withdrawable balance
     mapping(address => uint256) public consumerNonces;    // For unique escrow IDs
-    
+
     uint256 public accumulatedPlatformFees;  // Track fees for withdrawal
-    
+
     bytes32[] public allEscrowIds;
-    
+
     // Events
     event EscrowCreated(
         bytes32 indexed escrowId,
@@ -61,7 +208,7 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         uint256 amount,
         uint256 diemLimit
     );
-    
+
     event EscrowFunded(bytes32 indexed escrowId, uint256 amount);
     event KeyDelivered(bytes32 indexed escrowId, bytes32 apiKeyHash);
     event UsageReported(bytes32 indexed escrowId, uint256 usage);
@@ -75,34 +222,52 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
     event EscrowRefunded(bytes32 indexed escrowId, uint256 amount);
     event ProviderWithdrawal(address indexed provider, uint256 amount);
     event PlatformFeeWithdrawal(uint256 amount);
-    
+
     // Key verification events
     event KeyVerified(bytes32 indexed escrowId, address indexed consumer);
-    
+
     // Fee update events
     event FeeUpdateScheduled(uint256 platformFeeBps, uint256 unusedPenaltyBps, uint256 executeTime);
     event FeesUpdated(uint256 platformFeeBps, uint256 unusedPenaltyBps);
     event FeeUpdateCancelled();
-    
+
+    // Emergency pause
+    bool public paused = false;
+    uint256 public unpauseScheduledTime = 0;
+
+    event Paused(address account);
+    event UnpauseScheduled(uint256 unpauseTime);
+    event Unpaused();
+
+    // Timelocked fee updates
+    uint256 public pendingPlatformFeeBps;
+    uint256 public pendingUnusedPenaltyBps;
+    uint256 public feeUpdateScheduledTime;
+
     modifier onlyProvider(bytes32 _escrowId) {
         require(escrows[_escrowId].provider == msg.sender, "Not provider");
         _;
     }
-    
+
     modifier onlyConsumer(bytes32 _escrowId) {
         require(escrows[_escrowId].consumer == msg.sender, "Not consumer");
         _;
     }
-    
+
     modifier inStatus(bytes32 _escrowId, Status _status) {
         require(escrows[_escrowId].status == _status, "Wrong status");
         _;
     }
-    
+
+    modifier whenNotPaused() {
+        require(!paused, "Contract is paused");
+        _;
+    }
+
     constructor(address _usdc) {
         usdc = IERC20(_usdc);
     }
-    
+
     /**
      * @notice Create a new escrow agreement
      * @param _provider Address of DIEM provider
@@ -121,9 +286,9 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         require(_provider != msg.sender, "Cannot escrow with self");
         require(_diemLimit > 0, "DIEM limit must be > 0");
         require(_amount > 0, "Amount must be > 0");
-        
+
         uint256 duration = _duration == 0 ? defaultDuration : _duration;
-        
+
         escrowId = keccak256(abi.encodePacked(
             msg.sender,
             _provider,
@@ -131,7 +296,7 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
             block.timestamp,
             consumerNonces[msg.sender]++
         ));
-        
+
         escrows[escrowId] = Escrow({
             provider: _provider,
             consumer: msg.sender,
@@ -145,39 +310,40 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
             providerConfirmed: false,
             consumerConfirmed: false
         });
-        
+
         allEscrowIds.push(escrowId);
-        
+
         emit EscrowCreated(escrowId, _provider, msg.sender, _amount, _diemLimit);
-        
+
         return escrowId;
     }
-    
+
     /**
      * @notice Fund an escrow with USDC
      * @param _escrowId Escrow to fund
+     * @dev No payable needed - uses ERC20 transferFrom, not native ETH
      */
-    function fundEscrow(bytes32 _escrowId) 
-        external 
-        nonReentrant 
+    function fundEscrow(bytes32 _escrowId)
+        external
+        nonReentrant
         onlyConsumer(_escrowId)
-        inStatus(_escrowId, Status.Pending) 
+        inStatus(_escrowId, Status.Pending)
     {
         Escrow storage escrow = escrows[_escrowId];
-        
+
         // Transfer USDC from consumer
         require(
             usdc.transferFrom(msg.sender, address(this), escrow.amount),
             "USDC transfer failed"
         );
-        
+
         escrow.startTime = block.timestamp;
         escrow.endTime = block.timestamp + defaultDuration;
         escrow.status = Status.Funded;
-        
+
         emit EscrowFunded(_escrowId, escrow.amount);
     }
-    
+
     /**
      * @notice Provider confirms and delivers API key hash
      * @param _escrowId Escrow to deliver
@@ -189,32 +355,33 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         inStatus(_escrowId, Status.Funded)
     {
         require(_apiKeyHash != bytes32(0), "Invalid key hash");
-        
+
         Escrow storage escrow = escrows[_escrowId];
         escrow.apiKeyHash = _apiKeyHash;
         escrow.status = Status.Active;
-        
+
         emit KeyDelivered(_escrowId, _apiKeyHash);
     }
-    
+
     /**
      * @notice Verify an API key matches the stored hash
      * @param _escrowId Escrow to verify
      * @param _apiKey API key to verify (keccak256 hash is compared)
      * @return valid True if the key matches the stored hash
+     * @dev Changed from external to public to allow internal calls
      */
     function verifyApiKey(bytes32 _escrowId, string calldata _apiKey)
-        public  // Changed from external to allow internal calls from confirmKeyReceipt
+        public  // FIX: Changed from external to public
         view
-        returns (bool valid) 
+        returns (bool valid)
     {
         Escrow storage escrow = escrows[_escrowId];
         require(escrow.status != Status.Pending, "Escrow not funded");
-        
+
         bytes32 providedHash = keccak256(abi.encodePacked(_apiKey));
         return providedHash == escrow.apiKeyHash;
     }
-    
+
     /**
      * @notice Consumer can verify they received the correct key
      * @param _escrowId Escrow ID
@@ -226,10 +393,10 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         inStatus(_escrowId, Status.Active)
     {
         require(verifyApiKey(_escrowId, _apiKey), "Invalid API key");
-        
+
         emit KeyVerified(_escrowId, msg.sender);
     }
-    
+
     /**
      * @notice Report usage for an escrow (honest oracle model)
      * @param _escrowId Escrow to report
@@ -242,7 +409,7 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         Escrow storage escrow = escrows[_escrowId];
         require(_usage <= escrow.diemLimit, "Usage exceeds limit");
         require(block.timestamp <= escrow.endTime + 1 hours, "Reporting window closed");
-        
+
         if (msg.sender == escrow.consumer) {
             escrow.reportedUsage = _usage;
             escrow.consumerConfirmed = true;
@@ -254,15 +421,15 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         } else {
             revert("Not authorized");
         }
-        
+
         emit UsageReported(_escrowId, _usage);
-        
+
         // If both confirmed, auto-complete
         if (escrow.consumerConfirmed && escrow.providerConfirmed) {
             _completeEscrow(_escrowId);
         }
     }
-    
+
     /**
      * @notice Complete escrow and distribute funds
      * @param _escrowId Escrow to complete
@@ -270,44 +437,41 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
     function _completeEscrow(bytes32 _escrowId) internal {
         Escrow storage escrow = escrows[_escrowId];
         require(escrow.status == Status.Active, "Not active");
-        
+
         uint256 usage = escrow.reportedUsage;
         uint256 diemLimit = escrow.diemLimit;
         uint256 totalAmount = escrow.amount;
-        
+
         // Calculate distribution
-        // Provider gets: (usage / diemLimit) * amount * (1 - platformFee)
-        // But we need to account for the unused penalty
-        
         uint256 usedAmount = (totalAmount * usage) / diemLimit;
         uint256 unusedAmount = totalAmount - usedAmount;
-        
+
         // Platform fee on the used portion
         uint256 platformFee = (usedAmount * platformFeeBps) / BPS_DENOMINATOR;
         accumulatedPlatformFees += platformFee;
-        
+
         // Unused penalty (goes to provider as compensation)
         uint256 penaltyAmount = (unusedAmount * unusedPenaltyBps) / BPS_DENOMINATOR;
-        
+
         // Provider receives: usedAmount - platformFee + penaltyAmount
         uint256 providerAmount = usedAmount - platformFee + penaltyAmount;
-        
+
         // Consumer refund: unusedAmount - penaltyAmount
         uint256 consumerRefund = unusedAmount - penaltyAmount;
-        
+
         escrow.status = Status.Completed;
-        
+
         // Credit provider (they withdraw later)
         providerBalances[escrow.provider] += providerAmount;
-        
+
         // Transfer refund to consumer
         if (consumerRefund > 0) {
             require(usdc.transfer(escrow.consumer, consumerRefund), "Refund failed");
         }
-        
+
         emit EscrowCompleted(_escrowId, providerAmount, platformFee, penaltyAmount);
     }
-    
+
     /**
      * @notice Raise a dispute
      * @param _escrowId Escrow to dispute
@@ -322,12 +486,12 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
             "Not authorized"
         );
         require(block.timestamp <= escrow.endTime + 24 hours, "Dispute window closed");
-        
+
         escrow.status = Status.Disputed;
-        
+
         emit EscrowDisputed(_escrowId, msg.sender);
     }
-    
+
     /**
      * @notice Owner resolves dispute (manual for MVP)
      * @param _escrowId Escrow to resolve
@@ -340,25 +504,25 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         uint256 _consumerAmount
     ) external onlyOwner inStatus(_escrowId, Status.Disputed) {
         Escrow storage escrow = escrows[_escrowId];
-        
+
         require(
             _providerAmount + _consumerAmount <= escrow.amount,
             "Amounts exceed escrow"
         );
-        
+
         escrow.status = Status.Completed;
-        
+
         if (_providerAmount > 0) {
             providerBalances[escrow.provider] += _providerAmount;
         }
-        
+
         if (_consumerAmount > 0) {
             require(usdc.transfer(escrow.consumer, _consumerAmount), "Refund failed");
         }
-        
+
         emit EscrowCompleted(_escrowId, _providerAmount, 0, 0);
     }
-    
+
     /**
      * @notice Auto-refund if provider never delivers key
      * @param _escrowId Escrow to refund
@@ -370,14 +534,14 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
     {
         Escrow storage escrow = escrows[_escrowId];
         require(block.timestamp > escrow.startTime + 1 hours, "Not expired");
-        
+
         escrow.status = Status.Refunded;
-        
+
         require(usdc.transfer(escrow.consumer, escrow.amount), "Refund failed");
-        
+
         emit EscrowRefunded(_escrowId, escrow.amount);
     }
-    
+
     /**
      * @notice Auto-complete if consumer never reports
      * @param _escrowId Escrow to auto-complete
@@ -390,80 +554,75 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         Escrow storage escrow = escrows[_escrowId];
         require(block.timestamp > escrow.endTime + 2 hours, "Not expired");
         require(!escrow.consumerConfirmed, "Consumer reported");
-        
+
         // Assume full usage if consumer never reports
         escrow.reportedUsage = escrow.diemLimit;
         escrow.consumerConfirmed = true;
         escrow.providerConfirmed = true;
-        
+
         _completeEscrow(_escrowId);
     }
-    
+
     /**
      * @notice Provider withdraws their accumulated balance
      */
     function withdrawProviderBalance() external nonReentrant {
         uint256 amount = providerBalances[msg.sender];
         require(amount > 0, "No balance");
-        
+
         providerBalances[msg.sender] = 0;
-        
+
         require(usdc.transfer(msg.sender, amount), "Transfer failed");
-        
+
         emit ProviderWithdrawal(msg.sender, amount);
     }
-    
+
     /**
      * @notice Owner withdraws accumulated platform fees
      */
     function withdrawPlatformFees() external onlyOwner nonReentrant {
         uint256 amount = accumulatedPlatformFees;
         require(amount > 0, "No fees to withdraw");
-        
+
         accumulatedPlatformFees = 0;
-        
+
         require(usdc.transfer(owner(), amount), "Fee transfer failed");
-        
+
         emit PlatformFeeWithdrawal(amount);
     }
-    
-    // Timelocked fee updates
-    uint256 public pendingPlatformFeeBps;
-    uint256 public pendingUnusedPenaltyBps;
-    uint256 public feeUpdateScheduledTime;
-    
+
     /**
      * @notice Schedule a fee update (timelocked for 24 hours)
      */
-    function scheduleFeeUpdate(uint256 _platformFeeBps, uint256 _unusedPenaltyBps) 
-        external 
-        onlyOwner 
+    function scheduleFeeUpdate(uint256 _platformFeeBps, uint256 _unusedPenaltyBps)
+        external
+        onlyOwner
     {
         require(_platformFeeBps <= 500, "Platform fee max 5%");
         require(_unusedPenaltyBps <= 2000, "Penalty max 20%");
         require(feeUpdateScheduledTime == 0, "Update already scheduled");
-        
+
         pendingPlatformFeeBps = _platformFeeBps;
         pendingUnusedPenaltyBps = _unusedPenaltyBps;
         feeUpdateScheduledTime = block.timestamp + 24 hours;
-        
+
         emit FeeUpdateScheduled(_platformFeeBps, _unusedPenaltyBps, feeUpdateScheduledTime);
     }
-    
+
     /**
      * @notice Execute scheduled fee update after 24 hour delay
      */
     function executeFeeUpdate() external {
         require(feeUpdateScheduledTime > 0, "No update scheduled");
         require(block.timestamp >= feeUpdateScheduledTime, "Too early");
-        
+
         platformFeeBps = pendingPlatformFeeBps;
         unusedPenaltyBps = pendingUnusedPenaltyBps;
         feeUpdateScheduledTime = 0;
-        
+
         emit FeesUpdated(platformFeeBps, unusedPenaltyBps);
     }
-    
+
     /**
      * @notice Cancel scheduled fee update
      */
@@ -472,20 +631,7 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         feeUpdateScheduledTime = 0;
         emit FeeUpdateCancelled();
     }
-    
-    // Emergency pause
-    bool public paused = false;
-    uint256 public unpauseScheduledTime = 0;
-    
-    event Paused(address account);
-    event UnpauseScheduled(uint256 unpauseTime);
-    event Unpaused();
-    
-    modifier whenNotPaused() {
-        require(!paused, "Contract is paused");
-        _;
-    }
-    
+
     /**
      * @notice Emergency pause - can be called immediately by owner
      */
@@ -494,7 +640,7 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         unpauseScheduledTime = 0; // Clear any scheduled unpause
         emit Paused(msg.sender);
     }
-    
+
     /**
      * @notice Schedule unpause (24 hour timelock)
      */
@@ -504,7 +650,7 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         unpauseScheduledTime = block.timestamp + 24 hours;
         emit UnpauseScheduled(unpauseScheduledTime);
     }
-    
+
     /**
      * @notice Execute unpause after timelock
      */
@@ -512,19 +658,19 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         require(paused, "Not paused");
         require(unpauseScheduledTime > 0, "Unpause not scheduled");
         require(block.timestamp >= unpauseScheduledTime, "Too early");
-        
+
         paused = false;
         unpauseScheduledTime = 0;
         emit Unpaused();
     }
-    
+
     /**
      * @notice Get escrow details
      */
     function getEscrow(bytes32 _escrowId) external view returns (Escrow memory) {
         return escrows[_escrowId];
     }
-    
+
     /**
      * @notice Calculate expected distribution
      */
@@ -540,13 +686,20 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
     ) {
         uint256 usedAmount = (_totalAmount * _usage) / _diemLimit;
         uint256 unusedAmount = _totalAmount - usedAmount;
-        
+
         platformFee = (usedAmount * platformFeeBps) / BPS_DENOMINATOR;
         penaltyAmount = (unusedAmount * unusedPenaltyBps) / BPS_DENOMINATOR;
-        
+
         providerAmount = usedAmount - platformFee + penaltyAmount;
         consumerRefund = unusedAmount - penaltyAmount;
-        
+
         return (providerAmount, consumerRefund, platformFee, penaltyAmount);
+    }
+
+    /**
+     * @notice Get total escrow count
+     */
+    function getEscrowCount() external view returns (uint256) {
+        return allEscrowIds.length;
     }
 }
