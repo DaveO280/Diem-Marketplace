@@ -76,6 +76,9 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
     event ProviderWithdrawal(address indexed provider, uint256 amount);
     event PlatformFeeWithdrawal(uint256 amount);
     
+    // Key verification events
+    event KeyVerified(bytes32 indexed escrowId, address indexed consumer);
+    
     // Fee update events
     event FeeUpdateScheduled(uint256 platformFeeBps, uint256 unusedPenaltyBps, uint256 executeTime);
     event FeesUpdated(uint256 platformFeeBps, uint256 unusedPenaltyBps);
@@ -192,6 +195,39 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         escrow.status = Status.Active;
         
         emit KeyDelivered(_escrowId, _apiKeyHash);
+    }
+    
+    /**
+     * @notice Verify an API key matches the stored hash
+     * @param _escrowId Escrow to verify
+     * @param _apiKey API key to verify (keccak256 hash is compared)
+     * @return valid True if the key matches the stored hash
+     */
+    function verifyApiKey(bytes32 _escrowId, string calldata _apiKey) 
+        external 
+        view 
+        returns (bool valid) 
+    {
+        Escrow storage escrow = escrows[_escrowId];
+        require(escrow.status != Status.Pending, "Escrow not funded");
+        
+        bytes32 providedHash = keccak256(abi.encodePacked(_apiKey));
+        return providedHash == escrow.apiKeyHash;
+    }
+    
+    /**
+     * @notice Consumer can verify they received the correct key
+     * @param _escrowId Escrow ID
+     * @param _apiKey API key received from provider
+     */
+    function confirmKeyReceipt(bytes32 _escrowId, string calldata _apiKey)
+        external
+        onlyConsumer(_escrowId)
+        inStatus(_escrowId, Status.Active)
+    {
+        require(verifyApiKey(_escrowId, _apiKey), "Invalid API key");
+        
+        emit KeyVerified(_escrowId, msg.sender);
     }
     
     /**
