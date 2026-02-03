@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DACN - DIEM Agent Credit Network</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.0/dist/ethers.umd.min.js"></script>
+  <style>
+    .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+    .card { backdrop-filter: blur(10px); background: rgba(255,255,255,0.95); }
+    .animate-pulse-slow { animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+  <div id="app"></div>
+  
+  <script>
+    // DACN Simple Frontend
+    // No build step - just vanilla JS + Tailwind + Ethers
+    
+    const API_URL = 'http://localhost:3000/api/v1'; // Update to your backend
+    const ESCROW_CONTRACT = '0x...'; // Update after deployment
+    const USDC_CONTRACT = '0x036CbD53842c5426634e7929541eC2318f3dCF7e'; // Base Sepolia
+    
+    let provider, signer, walletAddress;
+    let veniceApiKey = localStorage.getItem('veniceApiKey') || '';
+    
+    // Main App Component
+    function App() {
+      return `
+        <div class="min-h-screen">
+          ${Header()}
+          <main class="container mx-auto px-4 py-8 max-w-6xl">
+            ${!walletAddress ? ConnectWallet() : Dashboard()}
+          </main>
+        </div>
+      `;
+    }
+    
+    function Header() {
+      return `
+        <header class="gradient-bg text-white shadow-lg">
+          <div class="container mx-auto px-4 py-6">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center text-2xl">⚡</div>
+                <div>
+                  <h1 class="text-2xl font-bold">DACN</h1>
+                  <p class="text-sm text-white/80">DIEM Agent Credit Network</p>
+                </div>
+              </div>
+              ${walletAddress ? `
+                <div class="flex items-center space-x-4">
+                  <span class="text-sm bg-white/20 px-3 py-1 rounded-full">
+                    ${walletAddress.slice(0,6)}...${walletAddress.slice(-4)}
+                  </span>
+                  <button onclick="disconnect()" class="text-sm hover:text-white/80">Disconnect</button>
+                </div>
+              ` : ''}
+            </div>
+          </div>
+        </header>
+      `;
+    }
+    
+    function ConnectWallet() {
+      return `
+        <div class="flex flex-col items-center justify-center py-20">
+          <div class="card rounded-2xl shadow-xl p-12 text-center max-w-md w-full">
+            <div class="text-6xl mb-6">🔌</div>
+            <h2 class="text-2xl font-bold text-gray-800 mb-2">Connect Wallet</h2>
+            <p class="text-gray-600 mb-8">Connect your Base wallet to manage DIEM listings</p>
+            <button onclick="connectWallet()" class="w-full gradient-bg text-white font-semibold py-3 px-6 rounded-xl hover:opacity-90 transition">
+              Connect MetaMask / Rabby
+            </button>
+          </div>
+        </div>
+      `;
+    }
+    
+    function Dashboard() {
+      return `
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          ${StatsCard()}
+          ${DIEMBalanceCard()}
+          ${QuickActions()}
+          ${ListingsSection()}
+          ${EarningsSection()}
+        </div>
+      `;
+    }
+    
+    function StatsCard() {
+      return `
+        <div class="lg:col-span-2 card rounded-2xl shadow-lg p-6">
+          <h3 class="text-lg font-semibold text-gray-800 mb-4">Overview</h3>
+          <div class="grid grid-cols-3 gap-4">
+            <div class="bg-blue-50 rounded-xl p-4">
+              <p class="text-sm text-blue-600 font-medium">Active Listings</p>
+              <p class="text-3xl font-bold text-blue-900" id="active-listings">-</p>
+            </div>
+            <div class="bg-green-50 rounded-xl p-4">
+              <p class="text-sm text-green-600 font-medium">Total Earnings</p>
+              <p class="text-3xl font-bold text-green-900" id="total-earnings">-</p>
+            </div>
+            <div class="bg-purple-50 rounded-xl p-4">
+              <p class="text-sm text-purple-600 font-medium">Lifetime Volume</p>
+              <p class="text-3xl font-bold text-purple-900" id="lifetime-volume">-</p>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+    
+    function DIEMBalanceCard() {
+      return `
+        <div class="card rounded-2xl shadow-lg p-6">
+          <h3 class="text-lg font-semibold text-gray-800 mb-4">Your DIEM</h3>
+          <div class="text-center">
+            <p class="text-5xl font-bold text-indigo-600 mb-2" id="diem-balance">-</p>
+            <p class="text-gray-500 text-sm">DIEM Available</p>
+            <p class="text-xs text-gray-400 mt-2">≈ $<span id="diem-usd-value">-</span> USD/day</p>
+          </div>
+          ${!veniceApiKey ? `
+            <div class="mt-4 p-3 bg-yellow-50 rounded-lg">
+              <p class="text-sm text-yellow-700">Add Venice API key to see balance</p>
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }
+    
+    function QuickActions() {
+      return `
+        <div class="lg:col-span-3 card rounded-2xl shadow-lg p-6">
+          <h3 class="text-lg font-semibold text-gray-800 mb-4">Quick Actions</h3>
+          <div class="flex flex-wrap gap-4">
+            <button onclick="showCreateListing()" class="flex items-center space-x-2 bg-indigo-600 text-white px-6 py-3 rounded-xl hover:bg-indigo-700 transition">
+              <span>+</span>
+              <span>Create Listing</span>
+            </button>
+            <button onclick="showSettings()" class="flex items-center space-x-2 bg-gray-200 text-gray-700 px-6 py-3 rounded-xl hover:bg-gray-300 transition">
+              <span>⚙️</span>
+              <span>Settings</span>
+            </button>
+            <button onclick="withdrawEarnings()" class="flex items-center space-x-2 bg-green-600 text-white px-6 py-3 rounded-xl hover:bg-green-700 transition">
+              <span>💰</span>
+              <span>Withdraw</span>
+            </button>
+          </div>
+        </div>
+      `;
+    }
+    
+    function ListingsSection() {
+      return `
+        <div class="lg:col-span-2 card rounded-2xl shadow-lg p-6">
+          <div class="flex justify-between items-center mb-4">
+            <h3 class="text-lg font-semibold text-gray-800">Your Listings</h3>
+            <button onclick="refreshListings()" class="text-sm text-indigo-600 hover:text-indigo-800">🔄 Refresh</button>
+          </div>
+          <div id="listings-container" class="space-y-3">
+            <p class="text-gray-500 text-center py-8">Loading...</p>
+          </div>
+        </div>
+      `;
+    }
+    
+    function EarningsSection() {
+      return `
+        <div class="card rounded-2xl shadow-lg p-6">
+          <h3 class="text-lg font-semibold text-gray-800 mb-4">Recent Earnings</h3>
+          <div id="earnings-container" class="space-y-3">
+            <p class="text-gray-500 text-center py-8">No earnings yet</p>
+          </div>
+        </div>
+      `;
+    }
+    
+    // Modal for creating listing
+    function showCreateListing() {
+      const modal = document.createElement('div');
+      modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50';
+      modal.innerHTML = `
+        <div class="card rounded-2xl shadow-2xl max-w-md w-full p-6 animate-pulse-slow">
+          <div class="flex justify-between items-center mb-6">
+            <h3 class="text-xl font-bold text-gray-800">Create Listing</h3>
+            <button onclick="this.closest('.fixed').remove()" class="text-gray-400 hover:text-gray-600">✕</button>
+          </div>
+          
+          <form onsubmit="createListing(event)" class="space-y-4">
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">DIEM Amount</label>
+              <input type="number" step="0.1" min="0.1" name="diem" required
+                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                placeholder="e.g., 5.0">
+              <p class="text-xs text-gray-500 mt-1">Max available: <span id="max-diem">-</span></p>
+            </div>
+            
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Price per DIEM (USDC)</label>
+              <input type="number" step="0.01" min="0.01" max="1" name="price" value="0.95" required
+                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
+              <p class="text-xs text-gray-500 mt-1">Suggested: 0.90-0.95 for quick sales</p>
+            </div>
+            
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Min Purchase</label>
+                <input type="number" step="0.1" name="min" value="0.1"
+                  class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Max Purchase</label>
+                <input type="number" step="0.1" name="max"
+                  class="w-full px-4 py-2 border border-gray-300 rounded-lg"
+                  placeholder="Optional">
+              </div>
+            </div>
+            
+            <div class="bg-blue-50 rounded-lg p-3 text-sm">
+              <p class="text-blue-800">
+                <strong>Estimated Revenue:</strong> <span id="estimated-revenue">-</span> USDC
+              </p>
+            </div>
+            
+            <div class="flex space-x-3 pt-4">
+              <button type="button" onclick="this.closest('.fixed').remove()"
+                class="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50">
+                Cancel
+              </button>
+              <button type="submit"
+                class="flex-1 gradient-bg text-white px-4 py-2 rounded-lg font-medium hover:opacity-90">
+                Create Listing
+              </button>
+            </div>
+          </form>
+        </div>
+      `;
+      document.body.appendChild(modal);
+      
+      // Update estimated revenue on input
+      modal.querySelector('input[name="diem"]').addEventListener('input', (e) => {
+        const diem = parseFloat(e.target.value) || 0;
+        const price = parseFloat(modal.querySelector('input[name="price"]').value) || 0;
+        document.getElementById('estimated-revenue').textContent = (diem * price).toFixed(2);
+      });
+      modal.querySelector('input[name="price"]').addEventListener('input', (e) => {
+        const price = parseFloat(e.target.value) || 0;
+        const diem = parseFloat(modal.querySelector('input[name="diem"]').value) || 0;
+        document.getElementById('estimated-revenue').textContent = (diem * price).toFixed(2);
+      });
+    }
+    
+    // Modal for settings (API keys)
+    function showSettings() {
+      const modal = document.createElement('div');
+      modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50';
+      modal.innerHTML = `
+        <div class="card rounded-2xl shadow-2xl max-w-md w-full p-6">
+          <div class="flex justify-between items-center mb-6">
+            <h3 class="text-xl font-bold text-gray-800">Settings</h3>
+            <button onclick="this.closest('.fixed').remove()" class="text-gray-400 hover:text-gray-600">✕</button>
+          </div>
+          
+          <form onsubmit="saveSettings(event)" class="space-y-4">
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Venice API Key</label>
+              <input type="password" name="veniceKey" value="${veniceKey}"
+                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                placeholder="venice_...">
+              <p class="text-xs text-gray-500 mt-1">Stored locally in your browser</p>
+            </div>
+            
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Backend API URL</label>
+              <input type="url" name="apiUrl" value="${API_URL}"
+                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
+            </div>
+            
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Escrow Contract</label>
+              <input type="text" name="contract" value="${ESCROW_CONTRACT}"
+                class="w-full px-4 py-2 border border-gray-300 rounded-lg font-mono text-sm"
+                placeholder="0x...">
+            </div>
+            
+            <div class="flex space-x-3 pt-4">
+              <button type="button" onclick="this.closest('.fixed').remove()"
+                class="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50">
+                Cancel
+              </button>
+              <button type="submit"
+                class="flex-1 gradient-bg text-white px-4 py-2 rounded-lg font-medium hover:opacity-90">
+                Save
+              </button>
+            </div>
+          </form>
+        </div>
+      `;
+      document.body.appendChild(modal);
+    }
+    
+    // Actions
+    async function connectWallet() {
+      if (!window.ethereum) {
+        alert('Please install MetaMask or Rabby wallet');
+        return;
+      }
+      
+      try {
+        await window.ethereum.request({ method: 'eth_requestAccounts' });
+        provider = new ethers.providers.Web3Provider(window.ethereum);
+        signer = provider.getSigner();
+        walletAddress = await signer.getAddress();
+        
+        // Switch to Base Sepolia
+        await window.ethereum.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: '0x14a34' }] // 84532 in hex
+        });
+        
+        render();
+        loadData();
+      } catch (err) {
+        console.error('Connect error:', err);
+        alert('Failed to connect: ' + err.message);
+      }
+    }
+    
+    function disconnect() {
+      walletAddress = null;
+      provider = null;
+      signer = null;
+      render();
+    }
+    
+    async function loadData() {
+      if (!walletAddress) return;
+      
+      // Load DIEM balance if we have Venice key
+      if (veniceApiKey) {
+        try {
+          const res = await fetch('https://api.venice.ai/api/v1/api_keys/rate_limits', {
+            headers: { 'Authorization': `Bearer ${veniceApiKey}` }
+          });
+          const data = await res.json();
+          const diem = data.data?.diemBalance || 0;
+          document.getElementById('diem-balance').textContent = diem.toFixed(2);
+          document.getElementById('diem-usd-value').textContent = diem.toFixed(2);
+          document.getElementById('max-diem').textContent = diem.toFixed(2);
+        } catch (e) {
+          console.error('Failed to load DIEM:', e);
+        }
+      }
+      
+      // Load mock stats (replace with real API calls)
+      document.getElementById('active-listings').textContent = '0';
+      document.getElementById('total-earnings').textContent = '$0.00';
+      document.getElementById('lifetime-volume').textContent = '0 DIEM';
+      
+      // Load listings
+      document.getElementById('listings-container').innerHTML = `
+        <div class="text-center py-8 text-gray-500">
+          <p>No active listings</p>
+          <button onclick="showCreateListing()" class="mt-2 text-indigo-600 hover:underline">Create your first listing</button>
+        </div>
+      `;
+    }
+    
+    async function createListing(e) {
+      e.preventDefault();
+      const form = e.target;
+      const data = {
+        diem: form.diem.value,
+        price: form.price.value,
+        min: form.min.value,
+        max: form.max.value || form.diem.value
+      };
+      
+      alert('Creating listing... (API not connected yet)\n\n' + JSON.stringify(data, null, 2));
+      form.closest('.fixed').remove();
+    }
+    
+    function saveSettings(e) {
+      e.preventDefault();
+      veniceApiKey = e.target.veniceKey.value;
+      localStorage.setItem('veniceApiKey', veniceApiKey);
+      e.target.closest('.fixed').remove();
+      loadData();
+    }
+    
+    function withdrawEarnings() {
+      alert('Withdraw functionality coming after contract deployment');
+    }
+    
+    function refreshListings() {
+      loadData();
+    }
+    
+    function render() {
+      document.getElementById('app').innerHTML = App();
+      if (walletAddress) loadData();
+    }
+    
+    // Init
+    render();
+  </script>
+</body>
+</html>

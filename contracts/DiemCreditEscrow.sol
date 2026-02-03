@@ -3,14 +3,14 @@ pragma solidity ^0.8.19;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "./TimelockController.sol";
 
 /**
  * @title DiemCreditEscrow
  * @notice Escrow contract for DIEM API credit marketplace
  * @dev Designed for Base network with USDC
  */
-contract DiemCreditEscrow is ReentrancyGuard, Ownable {
+contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
     
     IERC20 public immutable usdc;
     
@@ -49,6 +49,8 @@ contract DiemCreditEscrow is ReentrancyGuard, Ownable {
     mapping(address => uint256) public providerBalances;  // Withdrawable balance
     mapping(address => uint256) public consumerNonces;    // For unique escrow IDs
     
+    uint256 public accumulatedPlatformFees;  // Track fees for withdrawal
+    
     bytes32[] public allEscrowIds;
     
     // Events
@@ -73,6 +75,11 @@ contract DiemCreditEscrow is ReentrancyGuard, Ownable {
     event EscrowRefunded(bytes32 indexed escrowId, uint256 amount);
     event ProviderWithdrawal(address indexed provider, uint256 amount);
     event PlatformFeeWithdrawal(uint256 amount);
+    
+    // Fee update events
+    event FeeUpdateScheduled(uint256 platformFeeBps, uint256 unusedPenaltyBps, uint256 executeTime);
+    event FeesUpdated(uint256 platformFeeBps, uint256 unusedPenaltyBps);
+    event FeeUpdateCancelled();
     
     modifier onlyProvider(bytes32 _escrowId) {
         require(escrows[_escrowId].provider == msg.sender, "Not provider");
@@ -106,7 +113,7 @@ contract DiemCreditEscrow is ReentrancyGuard, Ownable {
         uint256 _diemLimit,
         uint256 _amount,
         uint256 _duration
-    ) external returns (bytes32 escrowId) {
+    ) external whenNotPaused returns (bytes32 escrowId) {
         require(_provider != address(0), "Invalid provider");
         require(_provider != msg.sender, "Cannot escrow with self");
         require(_diemLimit > 0, "DIEM limit must be > 0");
@@ -241,6 +248,7 @@ contract DiemCreditEscrow is ReentrancyGuard, Ownable {
         
         // Platform fee on the used portion
         uint256 platformFee = (usedAmount * platformFeeBps) / BPS_DENOMINATOR;
+        accumulatedPlatformFees += platformFee;
         
         // Unused penalty (goes to provider as compensation)
         uint256 penaltyAmount = (unusedAmount * unusedPenaltyBps) / BPS_DENOMINATOR;
@@ -372,23 +380,106 @@ contract DiemCreditEscrow is ReentrancyGuard, Ownable {
     /**
      * @notice Owner withdraws accumulated platform fees
      */
-    function withdrawPlatformFees() external onlyOwner {
-        // This would track platform fees separately in production
-        // For now, owner can withdraw any excess USDC
+    function withdrawPlatformFees() external onlyOwner nonReentrant {
+        uint256 amount = accumulatedPlatformFees;
+        require(amount > 0, "No fees to withdraw");
+        
+        accumulatedPlatformFees = 0;
+        
+        require(usdc.transfer(owner(), amount), "Fee transfer failed");
+        
+        emit PlatformFeeWithdrawal(amount);
     }
     
+    // Timelocked fee updates
+    uint256 public pendingPlatformFeeBps;
+    uint256 public pendingUnusedPenaltyBps;
+    uint256 public feeUpdateScheduledTime;
+    
     /**
-     * @notice Update fee configuration
+     * @notice Schedule a fee update (timelocked for 24 hours)
      */
-    function updateFees(uint256 _platformFeeBps, uint256 _unusedPenaltyBps) 
+    function scheduleFeeUpdate(uint256 _platformFeeBps, uint256 _unusedPenaltyBps) 
         external 
         onlyOwner 
     {
         require(_platformFeeBps <= 500, "Platform fee max 5%");
         require(_unusedPenaltyBps <= 2000, "Penalty max 20%");
+        require(feeUpdateScheduledTime == 0, "Update already scheduled");
         
-        platformFeeBps = _platformFeeBps;
-        unusedPenaltyBps = _unusedPenaltyBps;
+        pendingPlatformFeeBps = _platformFeeBps;
+        pendingUnusedPenaltyBps = _unusedPenaltyBps;
+        feeUpdateScheduledTime = block.timestamp + 24 hours;
+        
+        emit FeeUpdateScheduled(_platformFeeBps, _unusedPenaltyBps, feeUpdateScheduledTime);
+    }
+    
+    /**
+     * @notice Execute scheduled fee update after 24 hour delay
+     */
+    function executeFeeUpdate() external {
+        require(feeUpdateScheduledTime > 0, "No update scheduled");
+        require(block.timestamp >= feeUpdateScheduledTime, "Too early");
+        
+        platformFeeBps = pendingPlatformFeeBps;
+        unusedPenaltyBps = pendingUnusedPenaltyBps;
+        feeUpdateScheduledTime = 0;
+        
+        emit FeesUpdated(platformFeeBps, unusedPenaltyBps);
+    }
+    
+    /**
+     * @notice Cancel scheduled fee update
+     */
+    function cancelFeeUpdate() external onlyOwner {
+        require(feeUpdateScheduledTime > 0, "No update scheduled");
+        feeUpdateScheduledTime = 0;
+        emit FeeUpdateCancelled();
+    }
+    
+    // Emergency pause
+    bool public paused = false;
+    uint256 public unpauseScheduledTime = 0;
+    
+    event Paused(address account);
+    event UnpauseScheduled(uint256 unpauseTime);
+    event Unpaused();
+    
+    modifier whenNotPaused() {
+        require(!paused, "Contract is paused");
+        _;
+    }
+    
+    /**
+     * @notice Emergency pause - can be called immediately by owner
+     */
+    function pause() external onlyOwner {
+        paused = true;
+        unpauseScheduledTime = 0; // Clear any scheduled unpause
+        emit Paused(msg.sender);
+    }
+    
+    /**
+     * @notice Schedule unpause (24 hour timelock)
+     */
+    function scheduleUnpause() external onlyOwner {
+        require(paused, "Not paused");
+        require(unpauseScheduledTime == 0, "Unpause already scheduled");
+        unpauseScheduledTime = block.timestamp + 24 hours;
+        emit UnpauseScheduled(unpauseScheduledTime);
+    }
+    
+    /**
+     * @notice Execute unpause after timelock
+     */
+    function unpause() external {
+        require(paused, "Not paused");
+        require(unpauseScheduledTime > 0, "Unpause not scheduled");
+        require(block.timestamp >= unpauseScheduledTime, "Too early");
+        
+        paused = false;
+        unpauseScheduledTime = 0;
+        emit Unpaused();
     }
     
     /**
