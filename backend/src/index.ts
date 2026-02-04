@@ -9,25 +9,32 @@ import creditsRouter from './routes/credits';
 import webhooksRouter from './routes/webhooks';
 import { config } from './config';
 import { blockchainService } from './services/blockchain';
+import { runSecurityChecks, getCorsOrigins } from './security';
 
 const app = express();
 
+// Run security checks on startup
+runSecurityChecks();
+
 // Security middleware
 app.use(helmet());
-app.use(cors());
+app.use(cors({
+  origin: getCorsOrigins(),
+  credentials: true
+}));
 
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
+  windowMs: 15 * 60 * 1000,
+  max: 100,
   message: { error: 'Too many requests, please try again later' },
 });
 app.use(limiter);
 
 // Stricter rate limit for credit creation
 const creditLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 5, // 5 credit requests per minute
+  windowMs: 60 * 1000,
+  max: 5,
   message: { error: 'Too many credit requests, please slow down' },
 });
 
@@ -48,9 +55,8 @@ console.log('Database initialized');
 // Health check
 app.get('/health', async (req: Request, res: Response) => {
   try {
-    // Check blockchain connection
     const blockNumber = await blockchainService['provider'].getBlockNumber();
-    const balance = await blockchainService.getBalance();
+    const hasKey = !!config.blockchain.privateKey;
     
     res.json({
       status: 'healthy',
@@ -59,8 +65,8 @@ app.get('/health', async (req: Request, res: Response) => {
       blockchain: {
         connected: true,
         blockNumber,
-        walletAddress: blockchainService.getAddress(),
-        balance: `${balance} ETH`,
+        walletConfigured: hasKey,
+        walletAddress: hasKey ? blockchainService.getAddress() : null,
       },
     });
   } catch (error: any) {
@@ -90,11 +96,11 @@ app.use(errorHandler);
 app.listen(config.server.port, () => {
   console.log(`
 ╔════════════════════════════════════════════════════════╗
-║          DACN API Server (Base Sepolia)                ║
+║          DACN API Server                               ║
 ╠════════════════════════════════════════════════════════╣
 ║  Port:      ${config.server.port.toString().padEnd(43)}║
-║  Contract:  ${config.blockchain.contractAddress.slice(0, 20)}...${config.blockchain.contractAddress.slice(-10).padEnd(10)}║
-║  Wallet:    ${blockchainService.getAddress().slice(0, 20)}...${blockchainService.getAddress().slice(-10).padEnd(10)}║
+║  Env:       ${config.server.env.padEnd(43)}║
+║  Network:   ${config.blockchain.rpcUrl.includes('sepolia') ? 'Base Sepolia (testnet)' : 'PRODUCTION MAINNET ⚠️'}${''.padEnd(24)}║
 ╚════════════════════════════════════════════════════════╝
   `);
 });
