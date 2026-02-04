@@ -149,7 +149,7 @@ router.post('/:id/deliver', async (req, res) => {
 
     // Create Venice API key
     const apiKey = await veniceService.createLimitedKey(
-      `DECAN-${credit.id.slice(0, 8)}`,
+      `DACN-${credit.id.slice(0, 8)}`,
       credit.totalDiemAmount,
       credit.durationDays
     );

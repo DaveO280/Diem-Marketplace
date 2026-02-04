@@ -1,6 +1,6 @@
-# DECAN API Server
+# DACN API Server
 
-Backend API for the DIEM Agent Credit Network (DECAN) — an API marketplace where Venice.ai DIEM token holders can monetize spare API capacity.
+Backend API for the DIEM Agent Credit Network (DACN) — an API marketplace where Venice.ai DIEM token holders can monetize spare API capacity.
 
 ## Features
 

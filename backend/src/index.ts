@@ -88,7 +88,7 @@ app.use(errorHandler);
 app.listen(config.server.port, () => {
   console.log(`
 ╔════════════════════════════════════════════════════════╗
-║          DECAN API Server (Base Sepolia)               ║
+║          DACN API Server (Base Sepolia)                ║
 ╠════════════════════════════════════════════════════════╣
 ║  Port:      ${config.server.port.toString().padEnd(43)}║
 ║  Contract:  ${config.blockchain.contractAddress.slice(0, 20)}...${config.blockchain.contractAddress.slice(-10).padEnd(10)}║
