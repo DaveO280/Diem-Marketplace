@@ -1,0 +1,148 @@
+[
+  {
+    "inputs": [{ "internalType": "address", "name": "_usdc", "type": "address" }],
+    "stateMutability": "nonpayable",
+    "type": "constructor"
+  },
+  {
+    "inputs": [
+      { "internalType": "address", "name": "_provider", "type": "address" },
+      { "internalType": "uint256", "name": "_diemLimit", "type": "uint256" },
+      { "internalType": "uint256", "name": "_amount", "type": "uint256" },
+      { "internalType": "uint256", "name": "_duration", "type": "uint256" }
+    ],
+    "name": "createEscrow",
+    "outputs": [{ "internalType": "bytes32", "name": "escrowId", "type": "bytes32" }],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "bytes32", "name": "_escrowId", "type": "bytes32" }],
+    "name": "fundEscrow",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "bytes32", "name": "_escrowId", "type": "bytes32" },
+      { "internalType": "bytes32", "name": "_apiKeyHash", "type": "bytes32" }
+    ],
+    "name": "deliverKey",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "bytes32", "name": "_escrowId", "type": "bytes32" },
+      { "internalType": "uint256", "name": "_usage", "type": "uint256" }
+    ],
+    "name": "reportUsage",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "bytes32", "name": "_escrowId", "type": "bytes32" }],
+    "name": "getEscrow",
+    "outputs": [{
+      "components": [
+        { "internalType": "address", "name": "provider", "type": "address" },
+        { "internalType": "address", "name": "consumer", "type": "address" },
+        { "internalType": "uint256", "name": "amount", "type": "uint256" },
+        { "internalType": "uint256", "name": "diemLimit", "type": "uint256" },
+        { "internalType": "uint256", "name": "startTime", "type": "uint256" },
+        { "internalType": "uint256", "name": "endTime", "type": "uint256" },
+        { "internalType": "enum DiemCreditEscrow.Status", "name": "status", "type": "uint8" },
+        { "internalType": "bytes32", "name": "apiKeyHash", "type": "bytes32" },
+        { "internalType": "uint256", "name": "reportedUsage", "type": "uint256" },
+        { "internalType": "bool", "name": "providerConfirmed", "type": "bool" },
+        { "internalType": "bool", "name": "consumerConfirmed", "type": "bool" }
+      ],
+      "internalType": "struct DiemCreditEscrow.Escrow",
+      "name": "",
+      "type": "tuple"
+    }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "withdrawProviderBalance",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "address", "name": "", "type": "address" }],
+    "name": "providerBalances",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "platformFeeBps",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "usdc",
+    "outputs": [{ "internalType": "contract IERC20", "name": "", "type": "address" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "internalType": "bytes32", "name": "escrowId", "type": "bytes32" },
+      { "indexed": true, "internalType": "address", "name": "provider", "type": "address" },
+      { "indexed": true, "internalType": "address", "name": "consumer", "type": "address" },
+      { "indexed": false, "internalType": "uint256", "name": "amount", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "diemLimit", "type": "uint256" }
+    ],
+    "name": "EscrowCreated",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "internalType": "bytes32", "name": "escrowId", "type": "bytes32" },
+      { "indexed": false, "internalType": "uint256", "name": "amount", "type": "uint256" }
+    ],
+    "name": "EscrowFunded",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "internalType": "bytes32", "name": "escrowId", "type": "bytes32" },
+      { "indexed": false, "internalType": "bytes32", "name": "apiKeyHash", "type": "bytes32" }
+    ],
+    "name": "KeyDelivered",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "internalType": "bytes32", "name": "escrowId", "type": "bytes32" },
+      { "indexed": false, "internalType": "uint256", "name": "usage", "type": "uint256" }
+    ],
+    "name": "UsageReported",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "internalType": "bytes32", "name": "escrowId", "type": "bytes32" },
+      { "indexed": false, "internalType": "uint256", "name": "providerAmount", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "platformFee", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "penaltyAmount", "type": "uint256" }
+    ],
+    "name": "EscrowCompleted",
+    "type": "event"
+  }
+]

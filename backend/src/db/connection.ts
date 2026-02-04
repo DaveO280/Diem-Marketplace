@@ -76,6 +76,18 @@ export function initializeDatabase(): void {
     )
   `);
 
+  // Webhook deliveries table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS webhook_deliveries (
+      id TEXT PRIMARY KEY,
+      subscription_id TEXT NOT NULL,
+      event TEXT NOT NULL,
+      success INTEGER NOT NULL,
+      response TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
   // Create indexes
   db.exec(`CREATE INDEX IF NOT EXISTS idx_credits_provider ON credits(provider_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_credits_buyer ON credits(buyer_address)`);

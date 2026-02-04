@@ -7,7 +7,11 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "db:migrate": "ts-node src/db/migrate.ts"
+    "db:migrate": "ts-node src/db/migrate.ts",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:e2e": "jest --testPathPattern=e2e",
+    "test:ci": "jest --ci --coverage --testTimeout=60000"
   },
   "dependencies": {
     "better-sqlite3": "^9.4.3",
@@ -24,8 +28,13 @@
     "@types/better-sqlite3": "^7.6.9",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
+    "@types/jest": "^29.5.12",
     "@types/node": "^20.11.24",
+    "@types/supertest": "^6.0.2",
     "@types/uuid": "^9.0.8",
+    "jest": "^29.7.0",
+    "supertest": "^6.3.4",
+    "ts-jest": "^29.1.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
   }

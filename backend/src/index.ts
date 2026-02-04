@@ -6,6 +6,7 @@ import { initializeDatabase } from './db/connection';
 import { errorHandler, notFoundHandler } from './middleware/error';
 import providersRouter from './routes/providers';
 import creditsRouter from './routes/credits';
+import webhooksRouter from './routes/webhooks';
 import { config } from './config';
 import { blockchainService } from './services/blockchain';
 
@@ -74,6 +75,7 @@ app.get('/health', async (req: Request, res: Response) => {
 // API routes
 app.use('/api/providers', providersRouter);
 app.use('/api/credits', creditsRouter);
+app.use('/api/webhooks', webhooksRouter);
 
 // Apply stricter rate limit to credit requests
 app.use('/api/credits/request', creditLimiter);

@@ -1,132 +1,249 @@
-import { ethers } from 'ethers';
-import { config, CONTRACT_ABI, ERC20_ABI } from '../config';
-import { OnChainCredit } from '../types';
+import { ethers, Interface, Log } from 'ethers';
+import { config } from '../config';
+import DiemCreditEscrowABI from '../abis/DiemCreditEscrow.json';
+
+// USDC on Base Sepolia
+const USDC_ADDRESS = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
+
+// ERC20 ABI for USDC
+const ERC20_ABI = [
+  'function approve(address spender, uint256 amount) returns (bool)',
+  'function allowance(address owner, address spender) view returns (uint256)',
+  'function balanceOf(address account) view returns (uint256)',
+  'function decimals() view returns (uint8)'
+];
+
+export enum EscrowStatus {
+  Pending = 0,
+  Funded = 1,
+  Active = 2,
+  Completed = 3,
+  Disputed = 4,
+  Refunded = 5
+}
+
+export interface Escrow {
+  provider: string;
+  consumer: string;
+  amount: bigint;
+  diemLimit: bigint;
+  startTime: bigint;
+  endTime: bigint;
+  status: EscrowStatus;
+  apiKeyHash: string;
+  reportedUsage: bigint;
+  providerConfirmed: boolean;
+  consumerConfirmed: boolean;
+}
 
 class BlockchainService {
   private provider: ethers.JsonRpcProvider;
-  private wallet: ethers.Wallet;
+  private wallet: ethers.Wallet | null = null;
   private contract: ethers.Contract;
-  private usdc: ethers.Contract;
+  private contractInterface: Interface;
+  private usdcContract: ethers.Contract;
 
   constructor() {
-    if (!config.blockchain.privateKey) {
-      throw new Error('Private key not configured');
-    }
-    if (!config.blockchain.contractAddress) {
-      throw new Error('Contract address not configured');
-    }
-
-    this.provider = new ethers.JsonRpcProvider(config.blockchain.rpcUrl);
-    this.wallet = new ethers.Wallet(config.blockchain.privateKey, this.provider);
+    this.provider = new ethers.JsonRpcProvider(config.rpcUrl);
     this.contract = new ethers.Contract(
-      config.blockchain.contractAddress,
-      CONTRACT_ABI,
-      this.wallet
+      config.contractAddress,
+      DiemCreditEscrowABI,
+      this.provider
     );
-    this.usdc = new ethers.Contract(
-      config.blockchain.usdcAddress,
-      ERC20_ABI,
-      this.wallet
-    );
+    this.contractInterface = new Interface(DiemCreditEscrowABI);
+    this.usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, this.provider);
+
+    if (config.privateKey) {
+      this.wallet = new ethers.Wallet(config.privateKey, this.provider);
+      this.contract = this.contract.connect(this.wallet) as ethers.Contract;
+      this.usdcContract = this.usdcContract.connect(this.wallet) as ethers.Contract;
+    }
   }
 
-  getAddress(): string {
-    return this.wallet.address;
-  }
-
-  async getBalance(): Promise<string> {
-    const balance = await this.provider.getBalance(this.wallet.address);
-    return ethers.formatEther(balance);
-  }
-
-  async createCredit(
-    buyerAddress: string,
-    amount: bigint,
-    durationDays: number
-  ): Promise<number> {
-    // First approve USDC
-    const platformFee = (amount * BigInt(config.platform.feeBasisPoints)) / BigInt(10000);
-    const totalAmount = amount + platformFee;
-    
-    const approveTx = await this.usdc.approve(
-      config.blockchain.contractAddress,
-      totalAmount
-    );
-    await approveTx.wait();
-
-    // Create credit on-chain
-    const tx = await this.contract.createCredit(
-      buyerAddress,
-      amount,
-      durationDays
-    );
-    const receipt = await tx.wait();
-
-    // Parse event to get credit ID
-    const event = receipt.logs.find(
-      (log: any) => log.fragment?.name === 'CreditCreated'
-    );
-    
-    if (!event) {
-      throw new Error('CreditCreated event not found in transaction receipt');
+  /**
+   * Create a new escrow (consumer initiates)
+   * @returns escrowId (bytes32)
+   */
+  async createEscrow(
+    providerAddress: string,
+    diemLimitCents: number,
+    amountUSDC: bigint,
+    durationSeconds: number = 0
+  ): Promise<string> {
+    if (!this.wallet) {
+      throw new Error('Wallet not configured');
     }
 
-    return Number(event.args[0]);
+    const tx = await this.contract.createEscrow(
+      providerAddress,
+      diemLimitCents,
+      amountUSDC,
+      durationSeconds
+    );
+
+    const receipt = await tx.wait();
+    
+    // Parse event to get escrowId - ethers v6 compatible
+    const event = this.parseEvent(receipt, 'EscrowCreated');
+    if (!event) {
+      throw new Error('EscrowCreated event not found');
+    }
+    
+    return event.args[0] as string; // escrowId is first arg
   }
 
-  async deliverKey(creditId: number, keyHash: string): Promise<void> {
-    const tx = await this.contract.deliverKey(creditId, keyHash);
-    await tx.wait();
+  /**
+   * Fund an escrow with USDC (consumer)
+   */
+  async fundEscrow(escrowId: string): Promise<ethers.TransactionReceipt> {
+    if (!this.wallet) {
+      throw new Error('Wallet not configured');
+    }
+
+    // First approve USDC transfer
+    const escrow = await this.getEscrow(escrowId);
+    const currentAllowance = await this.usdcContract.allowance(
+      this.wallet.address,
+      config.contractAddress
+    );
+
+    if (currentAllowance < escrow.amount) {
+      const approveTx = await this.usdcContract.approve(
+        config.contractAddress,
+        escrow.amount
+      );
+      await approveTx.wait();
+    }
+
+    const tx = await this.contract.fundEscrow(escrowId);
+    return await tx.wait();
   }
 
-  async confirmReceipt(creditId: number): Promise<void> {
-    const tx = await this.contract.confirmReceipt(creditId);
-    await tx.wait();
+  /**
+   * Provider delivers API key hash
+   */
+  async deliverKey(escrowId: string, apiKeyHash: string): Promise<ethers.TransactionReceipt> {
+    if (!this.wallet) {
+      throw new Error('Wallet not configured');
+    }
+
+    const tx = await this.contract.deliverKey(escrowId, apiKeyHash);
+    return await tx.wait();
   }
 
-  async reportUsage(creditId: number, actualUsage: bigint): Promise<void> {
-    const tx = await this.contract.reportUsage(creditId, actualUsage);
-    await tx.wait();
+  /**
+   * Report usage (honest oracle - both parties)
+   */
+  async reportUsage(escrowId: string, usageCents: number): Promise<ethers.TransactionReceipt> {
+    if (!this.wallet) {
+      throw new Error('Wallet not configured');
+    }
+
+    const tx = await this.contract.reportUsage(escrowId, usageCents);
+    return await tx.wait();
   }
 
-  async confirmUsage(creditId: number): Promise<void> {
-    const tx = await this.contract.confirmUsage(creditId);
-    await tx.wait();
-  }
-
-  async cancelCredit(creditId: number): Promise<void> {
-    const tx = await this.contract.cancelCredit(creditId);
-    await tx.wait();
-  }
-
-  async getCredit(creditId: number): Promise<OnChainCredit> {
-    const credit = await this.contract.getCredit(creditId);
+  /**
+   * Get escrow details
+   */
+  async getEscrow(escrowId: string): Promise<Escrow> {
+    const result = await this.contract.getEscrow(escrowId);
+    
     return {
-      id: Number(credit.id),
-      provider: credit.provider,
-      buyer: credit.buyer,
-      amount: credit.amount,
-      startTime: Number(credit.startTime),
-      duration: Number(credit.duration),
-      status: Number(credit.status),
-      keyHash: credit.keyHash,
-      actualUsage: credit.actualUsage,
-      providerConfirmed: credit.providerConfirmed,
-      buyerConfirmed: credit.buyerConfirmed,
+      provider: result.provider,
+      consumer: result.consumer,
+      amount: result.amount,
+      diemLimit: result.diemLimit,
+      startTime: result.startTime,
+      endTime: result.endTime,
+      status: result.status,
+      apiKeyHash: result.apiKeyHash,
+      reportedUsage: result.reportedUsage,
+      providerConfirmed: result.providerConfirmed,
+      consumerConfirmed: result.consumerConfirmed
     };
   }
 
-  async getPlatformFee(): Promise<number> {
-    const fee = await this.contract.platformFeeBasisPoints();
+  /**
+   * Get provider withdrawable balance
+   */
+  async getProviderBalance(providerAddress: string): Promise<bigint> {
+    return await this.contract.providerBalances(providerAddress);
+  }
+
+  /**
+   * Provider withdraws accumulated balance
+   */
+  async withdrawProviderBalance(): Promise<ethers.TransactionReceipt> {
+    if (!this.wallet) {
+      throw new Error('Wallet not configured');
+    }
+
+    const tx = await this.contract.withdrawProviderBalance();
+    return await tx.wait();
+  }
+
+  /**
+   * Calculate expected distribution for given usage
+   */
+  async calculateDistribution(
+    totalAmount: bigint,
+    diemLimit: bigint,
+    usage: bigint
+  ): Promise<{
+    providerAmount: bigint;
+    consumerRefund: bigint;
+    platformFee: bigint;
+    penaltyAmount: bigint;
+  }> {
+    const result = await this.contract.calculateDistribution(totalAmount, diemLimit, usage);
+    
+    return {
+      providerAmount: result.providerAmount,
+      consumerRefund: result.consumerRefund,
+      platformFee: result.platformFee,
+      penaltyAmount: result.penaltyAmount
+    };
+  }
+
+  /**
+   * Get platform fee rate
+   */
+  async getPlatformFeeBps(): Promise<number> {
+    const fee = await this.contract.platformFeeBps();
     return Number(fee);
   }
 
-  // Listen for events
-  async listenForEvents(
-    eventName: string,
-    callback: (event: any) => void
-  ): Promise<void> {
-    this.contract.on(eventName, callback);
+  /**
+   * Parse event from transaction receipt (ethers v6 compatible)
+   */
+  private parseEvent(receipt: ethers.TransactionReceipt, eventName: string): ethers.LogDescription | null {
+    for (const log of receipt.logs) {
+      try {
+        const parsed = this.contractInterface.parseLog(log as Log);
+        if (parsed && parsed.name === eventName) {
+          return parsed;
+        }
+      } catch {
+        // Log doesn't match this event
+        continue;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Check if wallet is connected
+   */
+  isConnected(): boolean {
+    return this.wallet !== null;
+  }
+
+  /**
+   * Get connected wallet address
+   */
+  getAddress(): string | null {
+    return this.wallet?.address ?? null;
   }
 }
 
