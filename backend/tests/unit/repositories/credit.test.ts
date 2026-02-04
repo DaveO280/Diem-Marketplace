@@ -1,6 +1,5 @@
 import { CreditRepository } from '../../../src/repositories/credit';
 import { ProviderRepository } from '../../../src/repositories/provider';
-import { resetTestDb, getTestDb } from '../../utils/testDb';
 import { testProvider } from '../../fixtures/providers';
 import { CreditStatus } from '../../../src/types';
 
@@ -10,11 +9,8 @@ describe('CreditRepository', () => {
   let providerId: string;
 
   beforeEach(() => {
-    resetTestDb();
-    const db = getTestDb();
-    creditRepo = new CreditRepository(db);
-    providerRepo = new ProviderRepository(db);
-    
+    creditRepo = new CreditRepository();
+    providerRepo = new ProviderRepository();
     const provider = providerRepo.create(testProvider);
     providerId = provider.id;
   });
@@ -78,8 +74,9 @@ describe('CreditRepository', () => {
 
   describe('findByStatus', () => {
     it('should filter by status', () => {
-      creditRepo.create(createTestCredit({ status: CreditStatus.CREATED }));
+      creditRepo.create(createTestCredit({ creditId: 101, status: CreditStatus.CREATED }));
       creditRepo.create(createTestCredit({ 
+        creditId: 102,
         status: CreditStatus.CONFIRMED,
         buyerAddress: '0xAnotherBuyer56789012345678901234567890123456'
       }));
@@ -98,8 +95,9 @@ describe('CreditRepository', () => {
         address: '0xAnotherProvider1234567890123456789012345678'
       });
       
-      creditRepo.create(createTestCredit());
+      creditRepo.create(createTestCredit({ creditId: 201 }));
       creditRepo.create(createTestCredit({ 
+        creditId: 202,
         providerId: provider2.id,
         buyerAddress: '0xDifferentBuyer7890123456789012345678901234567'
       }));
@@ -114,9 +112,9 @@ describe('CreditRepository', () => {
       const buyer1 = '0xBuyerOne234567890123456789012345678901234567';
       const buyer2 = '0xBuyerTwo345678901234567890123456789012345678';
       
-      creditRepo.create(createTestCredit({ buyerAddress: buyer1 }));
-      creditRepo.create(createTestCredit({ buyerAddress: buyer1 }));
-      creditRepo.create(createTestCredit({ buyerAddress: buyer2 }));
+      creditRepo.create(createTestCredit({ creditId: 301, buyerAddress: buyer1 }));
+      creditRepo.create(createTestCredit({ creditId: 302, buyerAddress: buyer1 }));
+      creditRepo.create(createTestCredit({ creditId: 303, buyerAddress: buyer2 }));
       
       const buyer1Credits = creditRepo.findByBuyer(buyer1);
       expect(buyer1Credits).toHaveLength(2);

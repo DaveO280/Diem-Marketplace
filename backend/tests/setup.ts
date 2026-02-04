@@ -1,31 +1,19 @@
-import { db } from '../src/db/connection';
+import { db, initializeDatabase } from '../src/db/connection';
 
-// Global test setup
-beforeAll(async () => {
-  // Run migrations on test database
-  const fs = require('fs');
-  const path = require('path');
-  
-  const migrationPath = path.join(__dirname, '../src/db/migrations');
-  const files = fs.readdirSync(migrationPath).sort();
-  
-  for (const file of files) {
-    if (file.endsWith('.sql')) {
-      const sql = fs.readFileSync(path.join(migrationPath, file), 'utf8');
-      db.exec(sql);
-    }
-  }
+// Global test setup: use same schema as app (no migrations folder)
+beforeAll(() => {
+  initializeDatabase();
 });
 
-// Clean up between tests
+// Clean up between tests (delete in FK order to avoid constraint failures)
+const TEARDOWN_ORDER = ['usage_reports', 'api_keys', 'credits', 'providers', 'webhook_deliveries'];
 afterEach(() => {
-  // Clear test data but keep schema
-  const tables = db.prepare(`
-    SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'
-  `).all() as { name: string }[];
-  
-  for (const { name } of tables) {
-    db.prepare(`DELETE FROM ${name}`).run();
+  for (const name of TEARDOWN_ORDER) {
+    try {
+      db.prepare(`DELETE FROM ${name}`).run();
+    } catch {
+      // Table may not exist in older schemas
+    }
   }
 });
 

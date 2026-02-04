@@ -39,3 +39,7 @@ yarn-error.log*
 # Misc
 dist/
 build/
+
+# Backend runtime data
+backend/data/
+data/

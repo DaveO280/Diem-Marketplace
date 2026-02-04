@@ -1,14 +1,12 @@
 import request from 'supertest';
 import express from 'express';
 import providerRoutes from '../../src/routes/providers';
-import { resetTestDb, getTestDb } from '../utils/testDb';
 import { testProvider, testProvider2, invalidProvider } from '../fixtures/providers';
 
 describe('Provider API Integration', () => {
   let app: express.Application;
 
   beforeEach(() => {
-    resetTestDb();
     app = express();
     app.use(express.json());
     app.use('/api/providers', providerRoutes);

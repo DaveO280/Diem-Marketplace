@@ -2,7 +2,6 @@ import request from 'supertest';
 import express from 'express';
 import creditRoutes from '../../src/routes/credits';
 import providerRoutes from '../../src/routes/providers';
-import { resetTestDb } from '../utils/testDb';
 import { testProvider } from '../fixtures/providers';
 
 // Mock external services
@@ -60,18 +59,21 @@ describe('Credits API Integration (Escrow Flow)', () => {
   let escrowId = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
 
   beforeEach(async () => {
-    resetTestDb();
     app = express();
     app.use(express.json());
     app.use('/api/providers', providerRoutes);
     app.use('/api/credits', creditRoutes);
 
     // Create a test provider
-    const response = await request(app)
+    const providerRes = await request(app)
       .post('/api/providers')
-      .send(testProvider);
+      .send(testProvider)
+      .expect(201);
     
-    providerId = response.body.provider.id;
+    providerId = providerRes.body.provider.id;
+    if (!providerId) {
+      throw new Error('Provider creation did not return id. Body: ' + JSON.stringify(providerRes.body));
+    }
     
     jest.clearAllMocks();
   });
@@ -95,7 +97,7 @@ describe('Credits API Integration (Escrow Flow)', () => {
         .post('/api/credits/request')
         .send({
           providerId,
-          buyerAddress: '0xBuyer12345678901234567890123456789012345678',
+          buyerAddress: '0xB2e2123456789012345678901234567890123456',
           diemAmount: 5000,
           durationDays: 7
         })
@@ -123,7 +125,7 @@ describe('Credits API Integration (Escrow Flow)', () => {
         .post('/api/credits/request')
         .send({
           providerId,
-          buyerAddress: '0xBuyer12345678901234567890123456789012345678',
+          buyerAddress: '0xB2e2123456789012345678901234567890123456',
           diemAmount: 5000,
           durationDays: 7
         });
@@ -147,7 +149,7 @@ describe('Credits API Integration (Escrow Flow)', () => {
         .post('/api/credits/request')
         .send({
           providerId,
-          buyerAddress: '0xBuyer12345678901234567890123456789012345678',
+          buyerAddress: '0xB2e2123456789012345678901234567890123456',
           diemAmount: 5000,
           durationDays: 7
         });
@@ -168,7 +170,7 @@ describe('Credits API Integration (Escrow Flow)', () => {
         .post('/api/credits/request')
         .send({
           providerId,
-          buyerAddress: '0xBuyer12345678901234567890123456789012345678',
+          buyerAddress: '0xB2e2123456789012345678901234567890123456',
           diemAmount: 5000,
           durationDays: 7
         });
@@ -199,7 +201,7 @@ describe('Credits API Integration (Escrow Flow)', () => {
         .post('/api/credits/request')
         .send({
           providerId,
-          buyerAddress: '0xBuyer12345678901234567890123456789012345678',
+          buyerAddress: '0xB2e2123456789012345678901234567890123456',
           diemAmount: 5000,
           durationDays: 7
         });
@@ -230,7 +232,7 @@ describe('Credits API Integration (Escrow Flow)', () => {
         .post('/api/credits/request')
         .send({
           providerId,
-          buyerAddress: '0xBuyer12345678901234567890123456789012345678',
+          buyerAddress: '0xB2e2123456789012345678901234567890123456',
           diemAmount: 5000,
           durationDays: 7
         });
@@ -263,7 +265,7 @@ describe('Credits API Integration (Escrow Flow)', () => {
         .post('/api/credits/request')
         .send({
           providerId,
-          buyerAddress: '0xBuyer12345678901234567890123456789012345678',
+          buyerAddress: '0xB2e2123456789012345678901234567890123456',
           diemAmount: 5000,
           durationDays: 7
         });
@@ -287,7 +289,7 @@ describe('Credits API Integration (Escrow Flow)', () => {
         .post('/api/credits/request')
         .send({
           providerId,
-          buyerAddress: '0xBuyer12345678901234567890123456789012345678',
+          buyerAddress: '0xB2e2123456789012345678901234567890123456',
           diemAmount: 5000,
           durationDays: 7
         });
@@ -304,7 +306,7 @@ describe('Credits API Integration (Escrow Flow)', () => {
         .post('/api/credits/request')
         .send({
           providerId,
-          buyerAddress: '0xBuyer12345678901234567890123456789012345678',
+          buyerAddress: '0xB2e2123456789012345678901234567890123456',
           diemAmount: 5000,
           durationDays: 7
         });

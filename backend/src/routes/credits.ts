@@ -5,7 +5,7 @@ import { providerRepo } from '../repositories/provider';
 import { blockchainService, EscrowStatus } from '../services/blockchain';
 import { veniceService } from '../services/venice';
 import { notifyWebhook } from './webhooks';
-import { CreditStatus } from '../types';
+import { Credit, CreditStatus } from '../types';
 import { ethers } from 'ethers';
 
 const router = Router();
@@ -61,7 +61,7 @@ router.get('/quote', async (req, res) => {
 router.get('/', (req, res) => {
   const { buyer, provider, status } = req.query;
   
-  let credits;
+  let credits: Credit[];
   if (buyer) {
     credits = creditRepo.findByBuyer(buyer as string);
   } else if (provider) {

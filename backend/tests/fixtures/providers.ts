@@ -3,15 +3,15 @@ export const testProvider = {
   name: 'Test Provider',
   maxDiemCapacity: 100000, // $1000 in cents
   ratePerDiem: 950, // $0.95 per DIEM
-  webhookUrl: 'https://example.com/webhook'
+  isActive: true,
 };
 
 export const testProvider2 = {
-  address: '0x8ba1f109551bD432803012645Hac136c98C3f3B7',
+  address: '0x8ba1f109551bD432803012645aac136c98C3f3B7',
   name: 'Second Provider',
   maxDiemCapacity: 50000,
   ratePerDiem: 900,
-  webhookUrl: null
+  isActive: true,
 };
 
 export const invalidProvider = {

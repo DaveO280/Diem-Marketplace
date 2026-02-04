@@ -12,13 +12,14 @@ export class ProviderRepository {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
+    const isActive = provider.isActive !== false;
     stmt.run(
       id,
       provider.address,
       provider.name,
       provider.maxDiemCapacity,
       provider.ratePerDiem,
-      provider.isActive ? 1 : 0,
+      isActive ? 1 : 0,
       now,
       now
     );
@@ -28,6 +29,7 @@ export class ProviderRepository {
       id,
       createdAt: now,
       updatedAt: now,
+      isActive,
     };
   }
 

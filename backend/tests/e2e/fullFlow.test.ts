@@ -15,7 +15,6 @@ import request from 'supertest';
 import express from 'express';
 import providerRoutes from '../../src/routes/providers';
 import creditRoutes from '../../src/routes/credits';
-import { resetTestDb } from '../utils/testDb';
 
 const mockEscrowId = '0xe2e1234567890abcdef1234567890abcdef1234567890abcdef1234567890abc';
 let mockEscrowStatus = 1; // Funded
@@ -68,18 +67,18 @@ describe('E2E: Full Escrow Flow', () => {
   let creditId: string;
 
   const provider = {
-    address: '0xProviderE2E12345678901234567890123456789012',
+    address: '0xE2E1234567890123456789012345678901234567',
     name: 'E2E Test Provider',
     maxDiemCapacity: 100000,
-    ratePerDiem: 950
+    ratePerDiem: 950,
+    isActive: true,
   };
 
   const buyer = {
-    address: '0xBuyerE2E1234567890123456789012345678901234'
+    address: '0xB2eE2E1234567890123456789012345678901234'
   };
 
   beforeEach(async () => {
-    resetTestDb();
     mockEscrowStatus = 1; // Reset to funded
     app = express();
     app.use(express.json());
