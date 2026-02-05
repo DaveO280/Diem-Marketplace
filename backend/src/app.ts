@@ -7,11 +7,11 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import { providerRoutes } from './routes/providers';
-import { creditRoutes } from './routes/credits';
-import { webhookRoutes } from './routes/webhooks';
+import providerRoutes from './routes/providers';
+import creditRoutes from './routes/credits';
+import webhookRoutes from './routes/webhooks';
 import { errorHandler } from './middleware/error';
-import { config } from './config';
+import { getCorsOrigins } from './security';
 
 export function createApp(): express.Application {
   const app = express();
@@ -19,7 +19,7 @@ export function createApp(): express.Application {
   // Security middleware
   app.use(helmet());
   app.use(cors({
-    origin: config.corsOrigins
+    origin: getCorsOrigins()
   }));
 
   // Rate limiting

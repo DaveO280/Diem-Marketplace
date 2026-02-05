@@ -9,6 +9,18 @@ export interface Provider {
   updatedAt: string;
 }
 
+export interface Listing {
+  id: string;
+  providerId: string;
+  diemAmount: number;
+  ratePerDiem: number;
+  minPurchase: number | null;
+  maxPurchase: number | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Credit {
   id: string;
   creditId: number; // On-chain credit ID

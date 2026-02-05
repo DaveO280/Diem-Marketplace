@@ -7,11 +7,12 @@ class VeniceService {
   private baseUrl: string;
 
   constructor() {
-    if (!config.venice.apiKey) {
-      throw new Error('Venice API key not configured');
-    }
-    this.apiKey = config.venice.apiKey;
+    this.apiKey = config.venice.apiKey || '';
     this.baseUrl = config.venice.baseUrl;
+  }
+
+  get isConfigured(): boolean {
+    return !!this.apiKey;
   }
 
   async createLimitedKey(
@@ -19,6 +20,9 @@ class VeniceService {
     spendLimit: number,
     durationDays: number
   ): Promise<VeniceApiKey> {
+    if (!this.apiKey) {
+      throw new Error('Venice API key not configured. Set VENICE_API_KEY in the environment.');
+    }
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + durationDays);
 
@@ -40,8 +44,13 @@ class VeniceService {
       throw new Error(`Failed to create Venice API key: ${error}`);
     }
 
-    const data = await response.json();
-    
+    const data = await response.json() as {
+      id: string;
+      key: string;
+      name: string;
+      spend_limit?: number;
+      expires_at?: string;
+    };
     return {
       id: data.id,
       key: data.key,
@@ -52,6 +61,9 @@ class VeniceService {
   }
 
   async revokeKey(keyId: string): Promise<void> {
+    if (!this.apiKey) {
+      throw new Error('Venice API key not configured. Set VENICE_API_KEY in the environment.');
+    }
     const response = await fetch(`${this.baseUrl}/api/v1/api-keys/${keyId}`, {
       method: 'DELETE',
       headers: {

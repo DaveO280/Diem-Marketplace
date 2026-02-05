@@ -31,6 +31,19 @@ npm run build
 npm start
 ```
 
+## Deploy to Fly.io
+
+From the `backend/` directory:
+
+1. **First deploy (no machines yet):** Do **not** run `flyctl config save` — it fails when the app has no machines. Use the repo’s `fly.toml` and deploy:
+   ```bash
+   fly launch --no-deploy   # create app, then set secrets
+   fly volumes create dacn_data -r <region>   # e.g. ord, lax
+   fly secrets set RPC_URL=... CONTRACT_ADDRESS=... PRIVATE_KEY=... VENICE_API_KEY=...
+   fly deploy
+   ```
+2. **Later deploys:** `fly deploy` (or your existing pipeline, but remove or guard the `flyctl config save` step so it only runs when the app already has machines).
+
 ## Environment Variables
 
 | Variable | Description | Required |

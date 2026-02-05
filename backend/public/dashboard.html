@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DACN - Provider Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+  <div id="app" class="min-h-screen">
+    <!-- Loading state -->
+    <div class="flex items-center justify-center h-screen">
+      <div class="text-center">
+        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto"></div>
+        <p class="mt-4 text-gray-600">Loading DACN Dashboard...</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API_URL = (typeof window !== 'undefined' && window.location) ? window.location.origin : '';
+    let walletAddress = null;
+
+    async function init() {
+      // Check for wallet connection
+      if (window.ethereum) {
+        try {
+          const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+          if (accounts.length > 0) {
+            walletAddress = accounts[0];
+          }
+        } catch (e) {
+          console.error('Wallet check failed:', e);
+        }
+      }
+      render();
+    }
+
+    function render() {
+      const app = document.getElementById('app');
+      if (!walletAddress) {
+        app.innerHTML = ConnectWallet();
+      } else {
+        app.innerHTML = Dashboard();
+        loadDashboardData();
+      }
+    }
+
+    function ConnectWallet() {
+      return `
+        <div class="flex flex-col items-center justify-center min-h-screen">
+          <div class="bg-white rounded-2xl shadow-xl p-12 text-center max-w-md w-full">
+            <div class="text-6xl mb-6">⚡</div>
+            <h1 class="text-2xl font-bold text-gray-800 mb-2">DACN Provider</h1>
+            <p class="text-gray-600 mb-8">Connect your wallet to manage DIEM listings</p>
+            <button onclick="connectWallet()" class="w-full gradient-bg text-white font-semibold py-3 px-6 rounded-xl hover:opacity-90 transition">
+              Connect MetaMask
+            </button>
+          </div>
+        </div>
+      `;
+    }
+
+    function Dashboard() {
+      return `
+        <header class="gradient-bg text-white shadow-lg">
+          <div class="container mx-auto px-4 py-6">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center text-2xl">⚡</div>
+                <div>
+                  <h1 class="text-2xl font-bold">DACN</h1>
+                  <p class="text-sm text-white/80">Provider Dashboard</p>
+                </div>
+              </div>
+              <div class="flex items-center space-x-4">
+                <span class="text-sm bg-white/20 px-3 py-1 rounded-full font-mono">
+                  ${walletAddress.slice(0,6)}...${walletAddress.slice(-4)}
+                </span>
+                <button onclick="disconnect()" class="text-sm hover:text-white/80">Disconnect</button>
+              </div>
+            </div>
+          </div>
+        </header>
+        
+        <main class="container mx-auto px-4 py-8 max-w-6xl">
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Quick Actions -->
+            <div class="lg:col-span-3 bg-white rounded-2xl shadow p-6">
+              <h3 class="text-lg font-semibold text-gray-800 mb-4">Quick Actions</h3>
+              <div class="flex flex-wrap gap-4">
+                <button onclick="showCreateProvider()" class="bg-indigo-600 text-white px-6 py-3 rounded-xl hover:bg-indigo-700">
+                  + Register as Provider
+                </button>
+                <button onclick="showCreateListing()" class="bg-green-600 text-white px-6 py-3 rounded-xl hover:bg-green-700">
+                  + Create Credit Listing
+                </button>
+                <button onclick="refreshData()" class="bg-gray-200 text-gray-700 px-6 py-3 rounded-xl hover:bg-gray-300">
+                  🔄 Refresh
+                </button>
+              </div>
+            </div>
+
+            <!-- Stats -->
+            <div class="lg:col-span-2 bg-white rounded-2xl shadow p-6">
+              <h3 class="text-lg font-semibold text-gray-800 mb-4">Overview</h3>
+              <div id="stats-container" class="text-gray-500">
+                Loading stats...
+              </div>
+            </div>
+
+            <!-- Provider Info -->
+            <div class="bg-white rounded-2xl shadow p-6">
+              <h3 class="text-lg font-semibold text-gray-800 mb-4">Your Provider</h3>
+              <div id="provider-info" class="text-gray-500">
+                Loading provider info...
+              </div>
+            </div>
+
+            <!-- Active Listings -->
+            <div class="lg:col-span-2 bg-white rounded-2xl shadow p-6">
+              <h3 class="text-lg font-semibold text-gray-800 mb-4">Active Credits</h3>
+              <div id="credits-container" class="space-y-3">
+                <p class="text-gray-500">Loading credits...</p>
+              </div>
+            </div>
+
+            <!-- Recent Activity -->
+            <div class="bg-white rounded-2xl shadow p-6">
+              <h3 class="text-lg font-semibold text-gray-800 mb-4">API Reference</h3>
+              <div class="text-sm text-gray-600 space-y-2">
+                <p><strong>Base URL:</strong></p>
+                <code class="bg-gray-100 px-2 py-1 rounded block">${API_URL}</code>
+                
+                <p class="mt-4"><strong>Endpoints:</strong></p>
+                <ul class="list-disc list-inside space-y-1">
+                  <li><code>GET /api/providers</code></li>
+                  <li><code>POST /api/providers</code></li>
+                  <li><code>GET /api/credits</code></li>
+                  <li><code>POST /api/credits/request</code></li>
+                  <li><code>POST /api/webhooks/subscribe</code></li>
+                </ul>
+                
+                <p class="mt-4"><strong>Health:</strong></p>
+                <a href="${API_URL}/health" target="_blank" class="text-indigo-600 hover:underline">Check API Status</a>
+              </div>
+            </div>
+          </div>
+        </main>
+      `;
+    }
+
+    async function connectWallet() {
+      if (!window.ethereum) {
+        alert('Please install MetaMask');
+        return;
+      }
+      try {
+        const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+        walletAddress = accounts[0];
+        render();
+      } catch (e) {
+        alert('Failed to connect: ' + e.message);
+      }
+    }
+
+    function disconnect() {
+      walletAddress = null;
+      render();
+    }
+
+    async function loadDashboardData() {
+      try {
+        // Check health
+        const healthRes = await fetch(`${API_URL}/health`);
+        const health = await healthRes.json();
+        
+        if (health.status !== 'healthy') {
+          document.getElementById('stats-container').innerHTML = 
+            '<p class="text-red-500">API is unhealthy. Check console for details.</p>';
+          return;
+        }
+
+        // Load provider info
+        const providerRes = await fetch(`${API_URL}/api/providers`);
+        const providers = await providerRes.json();
+        
+        const myProvider = providers.providers?.find(p => 
+          p.address.toLowerCase() === walletAddress.toLowerCase()
+        );
+
+        if (myProvider) {
+          document.getElementById('provider-info').innerHTML = `
+            <div class="space-y-2">
+              <p><strong>Name:</strong> ${myProvider.name}</p>
+              <p><strong>Rate:</strong> ${myProvider.ratePerDiem} USDC/DIEM</p>
+              <p><strong>Max Capacity:</strong> ${myProvider.maxDiemCapacity} DIEM</p>
+              <p><strong>Status:</strong> <span class="${myProvider.isActive ? 'text-green-600' : 'text-red-600'}">${myProvider.isActive ? 'Active' : 'Inactive'}</span></p>
+            </div>
+          `;
+        } else {
+          document.getElementById('provider-info').innerHTML = `
+            <p class="text-yellow-600">You are not registered as a provider.</p>
+            <button onclick="showCreateProvider()" class="mt-2 text-indigo-600 hover:underline">Register now</button>
+          `;
+        }
+
+        // Load credits
+        const creditsRes = await fetch(`${API_URL}/api/credits?provider=${myProvider?.id || ''}`);
+        const credits = await creditsRes.json();
+        
+        if (credits.credits?.length > 0) {
+          document.getElementById('credits-container').innerHTML = credits.credits.map(c => `
+            <div class="border rounded-lg p-4 hover:bg-gray-50">
+              <div class="flex justify-between items-start">
+                <div>
+                  <p class="font-medium">Credit #${c.id.slice(0, 8)}</p>
+                  <p class="text-sm text-gray-500">${c.totalDiemAmount} DIEM × ${c.durationDays} days</p>
+                  <p class="text-sm text-gray-500">Buyer: ${c.buyerAddress.slice(0, 10)}...</p>
+                </div>
+                <span class="px-2 py-1 rounded text-xs font-medium ${getStatusColor(c.status)}">
+                  ${c.status}
+                </span>
+              </div>
+              ${c.status === 'created' ? `
+                <button onclick="deliverKey('${c.id}')" class="mt-2 text-sm bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700">
+                  Deliver API Key
+                </button>
+              ` : ''}
+            </div>
+          `).join('');
+        } else {
+          document.getElementById('credits-container').innerHTML = 
+            '<p class="text-gray-500">No active credits yet.</p>';
+        }
+
+        // Update stats
+        document.getElementById('stats-container').innerHTML = `
+          <div class="grid grid-cols-3 gap-4">
+            <div class="bg-blue-50 rounded-xl p-4">
+              <p class="text-sm text-blue-600 font-medium">Active Listings</p>
+              <p class="text-3xl font-bold text-blue-900">${providers.providers?.length || 0}</p>
+            </div>
+            <div class="bg-green-50 rounded-xl p-4">
+              <p class="text-sm text-green-600 font-medium">Active Credits</p>
+              <p class="text-3xl font-bold text-green-900">${credits.credits?.filter(c => ['created', 'key_delivered', 'confirmed'].includes(c.status)).length || 0}</p>
+            </div>
+            <div class="bg-purple-50 rounded-xl p-4">
+              <p class="text-sm text-purple-600 font-medium">Total Volume</p>
+              <p class="text-3xl font-bold text-purple-900">${credits.credits?.reduce((sum, c) => sum + c.totalDiemAmount, 0) || 0} DIEM</p>
+            </div>
+          </div>
+          <div class="mt-4 text-xs text-gray-400">
+            API Block: ${health.blockchain?.blockNumber || 'N/A'} | 
+            Wallet: ${health.blockchain?.walletAddress?.slice(0, 10)}...
+          </div>
+        `;
+
+      } catch (error) {
+        console.error('Failed to load dashboard:', error);
+        document.getElementById('stats-container').innerHTML = 
+          '<p class="text-red-500">Failed to load data. Is the API running?</p>';
+      }
+    }
+
+    function getStatusColor(status) {
+      const colors = {
+        requested: 'bg-gray-100 text-gray-800',
+        created: 'bg-blue-100 text-blue-800',
+        key_delivered: 'bg-yellow-100 text-yellow-800',
+        confirmed: 'bg-green-100 text-green-800',
+        usage_reported: 'bg-purple-100 text-purple-800',
+        completed: 'bg-green-100 text-green-800',
+        disputed: 'bg-red-100 text-red-800',
+        cancelled: 'bg-gray-100 text-gray-500',
+        expired: 'bg-gray-100 text-gray-500',
+      };
+      return colors[status] || 'bg-gray-100 text-gray-800';
+    }
+
+    function showCreateProvider() {
+      const name = prompt('Provider name:');
+      if (!name) return;
+      
+      const maxCapacity = prompt('Max DIEM capacity (default: 10000):', '10000');
+      const ratePerDiem = prompt('Rate per DIEM in USDC (default: 1000 = $0.001):', '1000');
+
+      fetch(`${API_URL}/api/providers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          address: walletAddress,
+          name,
+          maxDiemCapacity: parseInt(maxCapacity) || 10000,
+          ratePerDiem: parseInt(ratePerDiem) || 1000,
+        }),
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.error) {
+          alert('Error: ' + (data.error.message || data.error));
+        } else {
+          alert('Provider registered!');
+          refreshData();
+        }
+      })
+      .catch(err => alert('Failed: ' + err.message));
+    }
+
+    function showCreateListing() {
+      alert('To create a credit listing, use the Provider CLI:\n\ndacn-provider list --diem 5.0 --price 0.95\n\nOr POST to /api/credits/request');
+    }
+
+    function deliverKey(creditId) {
+      fetch(`${API_URL}/api/credits/${creditId}/deliver`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.error) {
+          alert('Error: ' + data.error);
+        } else if (data.apiKey) {
+          alert(`Key delivered!\n\nKey (save this):\n${data.apiKey.slice(0, 20)}...\n\nHash on-chain: ${data.credit.apiKeyHash.slice(0, 20)}...`);
+          refreshData();
+        }
+      })
+      .catch(err => alert('Failed: ' + err.message));
+    }
+
+    function refreshData() {
+      loadDashboardData();
+    }
+
+    // Initialize
+    init();
+  </script>
+</body>
+</html>

@@ -9,7 +9,7 @@ if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
 
-export const db = new Database(config.database.path);
+export const db: InstanceType<typeof Database> = new Database(config.database.path);
 
 // Enable WAL mode for better concurrency
 db.pragma('journal_mode = WAL');
@@ -88,8 +88,25 @@ export function initializeDatabase(): void {
     )
   `);
 
+  // Listings table (multiple per provider)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS listings (
+      id TEXT PRIMARY KEY,
+      provider_id TEXT NOT NULL,
+      diem_amount INTEGER NOT NULL,
+      rate_per_diem INTEGER NOT NULL,
+      min_purchase INTEGER,
+      max_purchase INTEGER,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (provider_id) REFERENCES providers(id)
+    )
+  `);
+
   // Create indexes
   db.exec(`CREATE INDEX IF NOT EXISTS idx_credits_provider ON credits(provider_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_credits_buyer ON credits(buyer_address)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_credits_status ON credits(status)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_listings_provider ON listings(provider_id)`);
 }

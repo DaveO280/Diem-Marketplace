@@ -36,28 +36,43 @@ export interface Escrow {
   consumerConfirmed: boolean;
 }
 
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
 class BlockchainService {
   private provider: ethers.JsonRpcProvider;
   private wallet: ethers.Wallet | null = null;
-  private contract: ethers.Contract;
+  private contract: ethers.Contract | null = null;
   private contractInterface: Interface;
   private usdcContract: ethers.Contract;
 
   constructor() {
-    this.provider = new ethers.JsonRpcProvider(config.rpcUrl);
-    this.contract = new ethers.Contract(
-      config.contractAddress,
-      DiemCreditEscrowABI,
-      this.provider
-    );
-    this.contractInterface = new Interface(DiemCreditEscrowABI);
+    this.provider = new ethers.JsonRpcProvider(config.blockchain.rpcUrl);
+    this.contractInterface = new Interface(DiemCreditEscrowABI as ethers.InterfaceAbi);
     this.usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, this.provider);
 
-    if (config.privateKey) {
-      this.wallet = new ethers.Wallet(config.privateKey, this.provider);
-      this.contract = this.contract.connect(this.wallet) as ethers.Contract;
+    const addr = (config.blockchain.contractAddress || '').trim();
+    if (addr && addr !== ZERO_ADDRESS) {
+      this.contract = new ethers.Contract(
+        addr,
+        DiemCreditEscrowABI as ethers.InterfaceAbi,
+        this.provider
+      );
+    }
+
+    if (config.blockchain.privateKey) {
+      this.wallet = new ethers.Wallet(config.blockchain.privateKey, this.provider);
+      if (this.contract) {
+        this.contract = this.contract.connect(this.wallet) as ethers.Contract;
+      }
       this.usdcContract = this.usdcContract.connect(this.wallet) as ethers.Contract;
     }
+  }
+
+  private ensureContract(): ethers.Contract {
+    if (!this.contract) {
+      throw new Error('Escrow contract not configured. Set CONTRACT_ADDRESS in .env.');
+    }
+    return this.contract;
   }
 
   /**
@@ -74,7 +89,8 @@ class BlockchainService {
       throw new Error('Wallet not configured');
     }
 
-    const tx = await this.contract.createEscrow(
+    const contract = this.ensureContract();
+    const tx = await contract.createEscrow(
       providerAddress,
       diemLimitCents,
       amountUSDC,
@@ -100,22 +116,24 @@ class BlockchainService {
       throw new Error('Wallet not configured');
     }
 
+    const contract = this.ensureContract();
+    const contractAddress = contract.target as string;
     // First approve USDC transfer
     const escrow = await this.getEscrow(escrowId);
     const currentAllowance = await this.usdcContract.allowance(
       this.wallet.address,
-      config.contractAddress
+      contractAddress
     );
 
     if (currentAllowance < escrow.amount) {
       const approveTx = await this.usdcContract.approve(
-        config.contractAddress,
+        contractAddress,
         escrow.amount
       );
       await approveTx.wait();
     }
 
-    const tx = await this.contract.fundEscrow(escrowId);
+    const tx = await contract.fundEscrow(escrowId);
     return await tx.wait();
   }
 
@@ -127,7 +145,7 @@ class BlockchainService {
       throw new Error('Wallet not configured');
     }
 
-    const tx = await this.contract.deliverKey(escrowId, apiKeyHash);
+    const tx = await this.ensureContract().deliverKey(escrowId, apiKeyHash);
     return await tx.wait();
   }
 
@@ -139,7 +157,7 @@ class BlockchainService {
       throw new Error('Wallet not configured');
     }
 
-    const tx = await this.contract.reportUsage(escrowId, usageCents);
+    const tx = await this.ensureContract().reportUsage(escrowId, usageCents);
     return await tx.wait();
   }
 
@@ -147,7 +165,7 @@ class BlockchainService {
    * Get escrow details
    */
   async getEscrow(escrowId: string): Promise<Escrow> {
-    const result = await this.contract.getEscrow(escrowId);
+    const result = await this.ensureContract().getEscrow(escrowId);
     
     return {
       provider: result.provider,
@@ -168,7 +186,7 @@ class BlockchainService {
    * Get provider withdrawable balance
    */
   async getProviderBalance(providerAddress: string): Promise<bigint> {
-    return await this.contract.providerBalances(providerAddress);
+    return await this.ensureContract().providerBalances(providerAddress);
   }
 
   /**
@@ -179,7 +197,7 @@ class BlockchainService {
       throw new Error('Wallet not configured');
     }
 
-    const tx = await this.contract.withdrawProviderBalance();
+    const tx = await this.ensureContract().withdrawProviderBalance();
     return await tx.wait();
   }
 
@@ -196,7 +214,7 @@ class BlockchainService {
     platformFee: bigint;
     penaltyAmount: bigint;
   }> {
-    const result = await this.contract.calculateDistribution(totalAmount, diemLimit, usage);
+    const result = await this.ensureContract().calculateDistribution(totalAmount, diemLimit, usage);
     
     return {
       providerAmount: result.providerAmount,
@@ -210,7 +228,7 @@ class BlockchainService {
    * Get platform fee rate
    */
   async getPlatformFeeBps(): Promise<number> {
-    const fee = await this.contract.platformFeeBps();
+    const fee = await this.ensureContract().platformFeeBps();
     return Number(fee);
   }
 
