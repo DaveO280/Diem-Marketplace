@@ -5,33 +5,38 @@ const { ethers } = require("hardhat");
 
 async function main() {
   const [deployer] = await ethers.getSigners();
-  
+  if (!deployer) {
+    throw new Error("No deployer account. Set PRIVATE_KEY in contracts/.env (copy from backend/.env if needed).");
+  }
   console.log("Deploying contracts with account:", deployer.address);
-  console.log("Account balance:", (await deployer.getBalance()).toString());
+  const balance = await ethers.provider.getBalance(deployer.address);
+  console.log("Account balance:", balance.toString());
 
-  // USDC on Base Sepolia (mintable test token; FiatToken 0x036CbD... is not minter-accessible)
-  const USDC_ADDRESS = process.env.USDC_ADDRESS || "0x6ac3ab54dc5019a2e57eccb214337ff5bbd52897";
+  // USDC testnet (Base Sepolia); mainnet uses different address
+  const USDC_ADDRESS = process.env.USDC_ADDRESS || "0x6Ac3aB54Dc5019A2e57eCcb214337FF5bbD52897";
   
   console.log("Using USDC at:", USDC_ADDRESS);
 
   // Deploy escrow contract
   const DiemCreditEscrow = await ethers.getContractFactory("DiemCreditEscrow");
   const escrow = await DiemCreditEscrow.deploy(USDC_ADDRESS);
+  await escrow.waitForDeployment();
+  const escrowAddress = await escrow.getAddress();
   
-  await escrow.deployed();
-  
-  console.log("✅ DiemCreditEscrow deployed to:", escrow.address);
+  console.log("✅ DiemCreditEscrow deployed to:", escrowAddress);
   console.log("");
-  console.log("Save this address! You'll need it for the API.");
+  console.log("Save this address! Set CONTRACT_ADDRESS in backend/.env and restart the API.");
   console.log("");
-  console.log("Contract owner:", await escrow.owner());
-  console.log("Platform fee:", (await escrow.platformFeeBps()).toString(), "bps (1%)");
-  console.log("Unused penalty:", (await escrow.unusedPenaltyBps()).toString(), "bps (5%)");
-  
-  // Verify on BaseScan (optional, for testnet)
+  try {
+    console.log("Contract owner:", await escrow.owner());
+    console.log("Platform fee:", (await escrow.platformFeeBps()).toString(), "bps (1%)");
+    console.log("Unused penalty:", (await escrow.unusedPenaltyBps()).toString(), "bps (5%)");
+  } catch (e) {
+    console.log("(Optional contract read failed; deployment succeeded.)");
+  }
   console.log("");
   console.log("To verify on BaseScan:");
-  console.log(`npx hardhat verify --network baseSepolia ${escrow.address} ${USDC_ADDRESS}`);
+  console.log(`npx hardhat verify --network baseSepolia ${escrowAddress} ${USDC_ADDRESS}`);
 }
 
 main()

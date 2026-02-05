@@ -61,7 +61,7 @@ PRIVATE_KEY=0xabc123...your_private_key_here
 BASE_SEPOLIA_RPC=https://sepolia.base.org
 
 # USDC on Base Sepolia (official testnet address)
-USDC_ADDRESS=0x036CbD53842c5426634e7929541eC2318f3dCF7e
+USDC_ADDRESS=0x6Ac3aB54Dc5019A2e57eCcb214337FF5bbD52897
 
 # Optional: For contract verification
 BASESCAN_API_KEY=your_basescan_api_key
@@ -94,7 +94,7 @@ Expected output:
 ```
 Deploying contracts with account: 0xYourAddress...
 Account balance: 500000000000000000 (0.5 ETH)
-Using USDC at: 0x036CbD53842c5426634e7929541eC2318f3dCF7e
+Using USDC at: 0x6Ac3aB54Dc5019A2e57eCcb214337FF5bbD52897
 
 ✅ DiemCreditEscrow deployed to: 0xYourContractAddress
 
@@ -105,7 +105,7 @@ Platform fee: 100 bps (1%)
 Unused penalty: 500 bps (5%)
 
 To verify on BaseScan:
-npx hardhat verify --network baseSepolia 0xYourContractAddress 0x036CbD53842c5426634e7929541eC2318f3dCF7e
+npx hardhat verify --network baseSepolia 0xYourContractAddress 0x6Ac3aB54Dc5019A2e57eCcb214337FF5bbD52897
 ```
 
 **🎉 Save that contract address! You'll need it.**
@@ -119,7 +119,7 @@ Verification makes the contract source code readable on BaseScan.
 3. Run:
 
 ```bash
-npm run verify:testnet -- 0xYourContractAddress 0x036CbD53842c5426634e7929541eC2318f3dCF7e
+npm run verify:testnet -- 0xYourContractAddress 0x6Ac3aB54Dc5019A2e57eCcb214337FF5bbD52897
 ```
 
 ## Step 8: Test the Contract
@@ -142,7 +142,7 @@ await escrow.platformFeeBps();  // Should be 100 (1%)
 await escrow.unusedPenaltyBps(); // Should be 500 (5%)
 
 // Get USDC contract
-const usdc = await ethers.getContractAt('IERC20', '0x036CbD53842c5426634e7929541eC2318f3dCF7e');
+const usdc = await ethers.getContractAt('IERC20', '0x6Ac3aB54Dc5019A2e57eCcb214337FF5bbD52897');
 
 // Check your USDC balance (should be 0 initially)
 const [signer] = await ethers.getSigners();

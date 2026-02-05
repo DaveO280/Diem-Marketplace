@@ -1,10 +1,12 @@
 require('@nomicfoundation/hardhat-toolbox');
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
+require('dotenv').config({ path: path.join(__dirname, '..', 'backend', '.env') });
 
 /** @type import('hardhat/config').HardhatUserConfig */
 module.exports = {
   solidity: {
-    version: '0.8.19',
+    version: '0.8.20',
     settings: {
       optimizer: {
         enabled: true,
@@ -60,7 +62,7 @@ module.exports = {
     ]
   },
   paths: {
-    sources: './',
+    sources: './src',
     tests: '../test',
     cache: './cache',
     artifacts: './artifacts'

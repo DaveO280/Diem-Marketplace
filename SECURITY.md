@@ -108,6 +108,30 @@ function resolveDispute(bytes32 _escrowId, uint256 _providerAmount, uint256 _con
 - Multisig with reputable arbitrators
 - Escalation process to higher courts
 
+### Webhook Authentication
+
+**Outbound (DACN → your endpoint): signed header**
+
+When you subscribe with a `secret`, the backend signs every webhook body with HMAC-SHA256 and sends:
+
+- `X-DACN-Signature: sha256=<hex(hmac(secret, body))>`
+- `X-DACN-Event`, `X-DACN-Timestamp`
+
+Your server should verify: recompute `hmac(secret, rawBody)` and compare to the header. Reject if it doesn’t match (prevents forgery and tampering).
+
+**Inbound (your app → DACN): API key auth**
+
+To protect who can list or delete webhook subscriptions, the backend can require an admin secret:
+
+- Set `WEBHOOK_ADMIN_SECRET` in `.env` (optional).
+- For `GET /api/webhooks/subscriptions` and `DELETE /api/webhooks/subscriptions/:id`, send header:
+  - `Authorization: Bearer <WEBHOOK_ADMIN_SECRET>` or `X-API-Key: <WEBHOOK_ADMIN_SECRET>`.
+- If the env is set and the request doesn’t send a matching value, respond 401.
+
+Without this, anyone who can reach the API can list/delete subscriptions (acceptable for testnet; for production, set the secret and use the header).
+
+---
+
 ### No Multisig (NOT SUITABLE FOR MAINNET)
 
 **Current Implementation:**

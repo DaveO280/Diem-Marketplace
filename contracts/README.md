@@ -94,7 +94,7 @@ npm run deploy:mainnet
 
 | Network | Address | USDC |
 |---------|---------|------|
-| Base Sepolia | TBD | 0x036CbD53842c5426634e7929541eC2318f3dCF7e |
+| Base Sepolia | TBD | 0x6Ac3aB54Dc5019A2e57eCcb214337FF5bbD52897 |
 | Base Mainnet | TBD | 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 |
 
 ## Security

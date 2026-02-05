@@ -95,6 +95,14 @@ app.get('/health', async (req: Request, res: Response) => {
   }
 });
 
+// Public config for frontend (contract address, RPC) so provider can sign deliverKey from their wallet
+app.get('/api/config', (_req: Request, res: Response) => {
+  res.json({
+    contractAddress: config.blockchain.contractAddress || null,
+    rpcUrl: config.blockchain.rpcUrl || 'https://sepolia.base.org',
+  });
+});
+
 // One-time USDC approval for escrow (backend wallet = buyer). Call this if funding fails with "transfer amount exceeds allowance".
 app.post('/api/approve-usdc', async (req: Request, res: Response) => {
   try {

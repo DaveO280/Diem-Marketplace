@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { config } from '../config';
 import { creditRepo } from '../repositories/credit';
 import { db } from '../db/connection';
 import { v4 as uuidv4 } from 'uuid';
@@ -55,10 +56,15 @@ router.post('/subscribe', (req, res) => {
   });
 });
 
-// List subscriptions (with a secret header for auth)
+// List subscriptions — if WEBHOOK_ADMIN_SECRET is set, require Authorization: Bearer <secret> or X-API-Key: <secret>
 router.get('/subscriptions', (req, res) => {
-  const { secret } = req.headers;
-  // In production, use proper auth. For now, just list all
+  const adminSecret = config.webhook?.adminSecret;
+  if (adminSecret) {
+    const auth = (req.headers.authorization?.replace(/^Bearer\s+/i, '').trim() || (req.headers['x-api-key'] as string) || '').trim();
+    if (auth !== adminSecret) {
+      return res.status(401).json({ error: 'Missing or invalid webhook admin auth' });
+    }
+  }
   const subs = Array.from(subscriptions.values()).map(s => ({
     id: s.id,
     url: s.url,
@@ -68,8 +74,15 @@ router.get('/subscriptions', (req, res) => {
   res.json({ subscriptions: subs });
 });
 
-// Unsubscribe
+// Unsubscribe — same admin auth as GET /subscriptions when WEBHOOK_ADMIN_SECRET is set
 router.delete('/subscriptions/:id', (req, res) => {
+  const adminSecret = config.webhook?.adminSecret;
+  if (adminSecret) {
+    const auth = (req.headers.authorization?.replace(/^Bearer\s+/i, '').trim() || (req.headers['x-api-key'] as string) || '').trim();
+    if (auth !== adminSecret) {
+      return res.status(401).json({ error: 'Missing or invalid webhook admin auth' });
+    }
+  }
   const deleted = subscriptions.delete(req.params.id);
   if (!deleted) {
     return res.status(404).json({ error: 'Subscription not found' });

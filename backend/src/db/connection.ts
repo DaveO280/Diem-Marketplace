@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import Database from 'better-sqlite3-multiple-ciphers';
 import path from 'path';
 import fs from 'fs';
 import { config } from '../config';
@@ -10,6 +10,13 @@ if (!fs.existsSync(dbDir)) {
 }
 
 export const db: InstanceType<typeof Database> = new Database(config.database.path);
+
+// Encryption at rest: set key before any other statement (SQLite3 Multiple Ciphers)
+const encKey = config.database.encryptionKey;
+if (encKey && encKey.length > 0) {
+  const escaped = encKey.replace(/'/g, "''");
+  db.pragma(`key='${escaped}'`);
+}
 
 // Enable WAL mode for better concurrency
 db.pragma('journal_mode = WAL');

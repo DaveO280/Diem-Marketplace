@@ -10,16 +10,20 @@ export const config = {
   },
   database: {
     path: process.env.DATABASE_PATH || './data/decan.db',
+    encryptionKey: process.env.DB_ENCRYPTION_KEY || '',
   },
   blockchain: {
-    rpcUrl: process.env.RPC_URL || 'https://sepolia.base.org',
-    contractAddress: process.env.CONTRACT_ADDRESS || '',
-    privateKey: process.env.PRIVATE_KEY || '',
-    usdcAddress: process.env.USDC_ADDRESS || '0x6ac3ab54dc5019a2e57eccb214337ff5bbd52897',
+    rpcUrl: (process.env.RPC_URL || 'https://sepolia.base.org').trim(),
+    contractAddress: (process.env.CONTRACT_ADDRESS || '').trim(),
+    privateKey: (process.env.PRIVATE_KEY || '').trim(),
+    usdcAddress: (process.env.USDC_ADDRESS || '0x6Ac3aB54Dc5019A2e57eCcb214337FF5bbD52897').trim(),
   },
   venice: {
     apiKey: process.env.VENICE_API_KEY || '',
     baseUrl: process.env.VENICE_BASE_URL || 'https://api.venice.ai',
+  },
+  webhook: {
+    adminSecret: (process.env.WEBHOOK_ADMIN_SECRET || '').trim(),
   },
   platform: {
     feeBasisPoints: parseInt(process.env.PLATFORM_FORM_FEE_BASIS_POINTS || '100'), // 1%

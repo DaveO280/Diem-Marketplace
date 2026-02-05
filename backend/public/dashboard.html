@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DACN - Provider Dashboard</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.0/dist/ethers.umd.min.js"></script>
   <style>
     .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
   </style>
@@ -122,7 +123,8 @@
 
             <!-- Active Listings -->
             <div class="lg:col-span-2 bg-white rounded-2xl shadow p-6">
-              <h3 class="text-lg font-semibold text-gray-800 mb-4">Active Credits</h3>
+              <h3 class="text-lg font-semibold text-gray-800 mb-4">Active Credits (as provider)</h3>
+              <p class="text-xs text-gray-500 mb-2">Connect with your <strong>provider</strong> wallet (the one you used to create the listing) to see credits. For status <strong>created</strong>, click <strong>Deliver API Key</strong> to send the key on-chain.</p>
               <div id="credits-container" class="space-y-3">
                 <p class="text-gray-500">Loading credits...</p>
               </div>
@@ -208,12 +210,21 @@
           `;
         }
 
-        // Load credits
+        // Load credits (only shows credits for this provider)
         const creditsRes = await fetch(`${API_URL}/api/credits?provider=${myProvider?.id || ''}`);
         const credits = await creditsRes.json();
+        const creditList = credits.credits || [];
+        const createdCount = creditList.filter(c => c.status === 'created').length;
         
-        if (credits.credits?.length > 0) {
-          document.getElementById('credits-container').innerHTML = credits.credits.map(c => `
+        if (!myProvider) {
+          document.getElementById('credits-container').innerHTML = 
+            '<p class="text-amber-600">Connect the wallet you used to <strong>register as a provider</strong> to see credits and the Deliver API Key button.</p>';
+        } else if (creditList.length > 0) {
+          let html = '';
+          if (createdCount > 0) {
+            html += `<div class="mb-4 p-3 bg-indigo-50 border border-indigo-200 rounded-lg"><strong>${createdCount} credit(s) ready to deliver</strong> — click <strong>Deliver API Key</strong> below.</div>`;
+          }
+          html += creditList.map(c => `
             <div class="border rounded-lg p-4 hover:bg-gray-50">
               <div class="flex justify-between items-start">
                 <div>
@@ -229,12 +240,15 @@
                 <button onclick="deliverKey('${c.id}')" class="mt-2 text-sm bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700">
                   Deliver API Key
                 </button>
+              ` : c.status === 'requested' ? `
+                <p class="mt-2 text-xs text-amber-600">Waiting for buyer to fund escrow — then Deliver API Key will appear.</p>
               ` : ''}
             </div>
           `).join('');
+          document.getElementById('credits-container').innerHTML = html;
         } else {
           document.getElementById('credits-container').innerHTML = 
-            '<p class="text-gray-500">No active credits yet.</p>';
+            '<p class="text-gray-500">No credits for your provider account yet.</p>';
         }
 
         // Update stats
@@ -314,21 +328,54 @@
       alert('To create a credit listing, use the Provider CLI:\n\ndacn-provider list --diem 5.0 --price 0.95\n\nOr POST to /api/credits/request');
     }
 
-    function deliverKey(creditId) {
-      fetch(`${API_URL}/api/credits/${creditId}/deliver`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      })
-      .then(res => res.json())
-      .then(data => {
+    const ESCROW_ABI = ['function deliverKey(bytes32 _escrowId, bytes32 _apiKeyHash) external'];
+
+    async function deliverKey(creditId) {
+      if (!window.ethereum) {
+        alert('Connect MetaMask first (provider wallet must sign the on-chain deliver).');
+        return;
+      }
+      try {
+        const deliverRes = await fetch(`${API_URL}/api/credits/${creditId}/deliver`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        const data = await deliverRes.json();
         if (data.error) {
           alert('Error: ' + data.error);
-        } else if (data.apiKey) {
-          alert(`Key delivered!\n\nKey (save this):\n${data.apiKey.slice(0, 20)}...\n\nHash on-chain: ${data.credit.apiKeyHash.slice(0, 20)}...`);
-          refreshData();
+          return;
         }
-      })
-      .catch(err => alert('Failed: ' + err.message));
+        const { escrowId, keyHash, apiKey } = data;
+        if (!escrowId || !keyHash || !apiKey) {
+          alert('Missing escrowId/keyHash/apiKey from server');
+          return;
+        }
+        const configRes = await fetch(`${API_URL}/api/config`);
+        const config = await configRes.json();
+        if (!config.contractAddress) {
+          alert('Contract not configured on server. Set CONTRACT_ADDRESS in backend .env.');
+          return;
+        }
+        const provider = new ethers.providers.Web3Provider(window.ethereum);
+        const signer = provider.getSigner();
+        const contract = new ethers.Contract(config.contractAddress, ESCROW_ABI, signer);
+        const tx = await contract.deliverKey(escrowId, keyHash);
+        await tx.wait();
+        const markRes = await fetch(`${API_URL}/api/credits/${creditId}/mark-delivered`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        const markData = await markRes.json();
+        if (markData.error) {
+          alert('Key delivered on-chain but failed to update dashboard: ' + markData.error);
+        } else {
+          alert('Key delivered!\n\nKey (save this):\n' + apiKey.slice(0, 40) + '...\n\nHash on-chain: ' + (markData.credit && markData.credit.apiKeyHash ? markData.credit.apiKeyHash.slice(0, 20) + '...' : keyHash.slice(0, 20) + '...'));
+        }
+        refreshData();
+      } catch (err) {
+        const msg = err.revert && err.revert.args ? (err.revert.args[0] || err.message) : (err.message || String(err));
+        alert('Failed: ' + msg);
+      }
     }
 
     function refreshData() {

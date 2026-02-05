@@ -2,8 +2,8 @@ import { ethers, Interface, Log } from 'ethers';
 import { config } from '../config';
 import DiemCreditEscrowABI from '../abis/DiemCreditEscrow.json';
 
-// USDC on Base Sepolia (mintable test token; set USDC_ADDRESS in .env to override)
-const DEFAULT_USDC = '0x6ac3ab54dc5019a2e57eccb214337ff5bbd52897';
+// USDC testnet (Base Sepolia mintable token); mainnet uses different address. Override via USDC_ADDRESS.
+const DEFAULT_USDC = '0x6Ac3aB54Dc5019A2e57eCcb214337FF5bbD52897';
 
 // ERC20 ABI for USDC
 const ERC20_ABI = [

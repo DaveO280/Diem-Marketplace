@@ -53,227 +53,26 @@ DACN enables AI agents (like OpenClaw agents) to rent Venice.ai API capacity fro
 
 ### Smart Contract Architecture (Base Network)
 
-**Escrow Contract:** `DiemCreditEscrow.sol`
+**Escrow contract:** `contracts/DiemCreditEscrow.sol`
 
-```solidity
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
-
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
-
-contract DiemCreditEscrow is ReentrancyGuard, Ownable {
-    IERC20 public usdc;
-    
-    uint256 public constant PLATFORM_FEE_BPS = 100; // 1%
-    uint256 public constant UNUSED_PENALTY_BPS = 500; // 5%
-    uint256 public constant BPS_DENOMINATOR = 10000;
-    
-    enum Status { Pending, Active, Completed, Disputed, Refunded }
-    
-    struct Escrow {
-        address provider;
-        address consumer;
-        uint256 amount;           // Total USDC amount
-        uint256 diemLimit;        // DIEM credit limit (in cents)
-        uint256 platformFee;      // 1% of amount
-        uint256 startTime;
-        uint256 endTime;
-        Status status;
-        bytes32 apiKeyHash;       // Hash of the API key (not the key itself)
-        uint256 reportedUsage;    // Amount actually used (in cents)
-    }
-    
-    mapping(bytes32 => Escrow) public escrows;
-    mapping(address => uint256) public providerBalances;
-    
-    event EscrowCreated(bytes32 indexed escrowId, address provider, address consumer, uint256 amount);
-    event EscrowFunded(bytes32 indexed escrowId);
-    event UsageReported(bytes32 indexed escrowId, uint256 usage);
-    event EscrowReleased(bytes32 indexed escrowId, uint256 providerAmount, uint256 platformFee);
-    event EscrowDisputed(bytes32 indexed escrowId);
-    
-    constructor(address _usdc) {
-        usdc = IERC20(_usdc);
-    }
-    
-    // Consumer initiates escrow
-    function createEscrow(
-        address _provider,
-        uint256 _diemLimit,
-        uint256 _duration
-    ) external returns (bytes32 escrowId) {
-        // Implementation
-    }
-    
-    // Consumer funds the escrow
-    function fundEscrow(bytes32 _escrowId) external nonReentrant {
-        // Implementation
-    }
-    
-    // Honest oracle: both parties report usage
-    function reportUsage(bytes32 _escrowId, uint256 _usage) external {
-        // Implementation
-    }
-    
-    // Release funds after usage confirmed
-    function releaseEscrow(bytes32 _escrowId) external nonReentrant {
-        // Implementation
-    }
-}
-```
-
-**Key Design Decisions:**
-- USDC on Base (fast, cheap, DIEM is already on Base)
-- 1% platform fee
-- 5% penalty for unused credit (goes to provider)
-- API key hash stored, not the key itself
-- 24-hour default escrow duration (matches DIEM epoch)
+- **Token:** USDC (testnet: `0x6Ac3aB54Dc5019A2e57eCcb214337FF5bbD52897` on Base Sepolia; mainnet uses a different USDC address.)
+- **States:** `Pending` → consumer funds → `Funded` → provider delivers key hash → `Active` → usage reported & confirmed → `Completed`. Also `Disputed`, `Refunded`.
+- **Key functions:** `createEscrow(provider, diemLimit, amount, duration)`, `fundEscrow(escrowId)`, `deliverKey(escrowId, apiKeyHash)` (provider-only), `reportUsage(escrowId, usage)` (honest oracle), `confirmKeyReceipt(escrowId)` (consumer), `withdrawProviderBalance()` / owner fee withdrawal. Timelock on fee changes; emergency pause.
+- **Design:** 1% platform fee, configurable unused penalty (max 20%); API key stored as hash only; 24h default duration.
 
 ---
 
-## API Specification
+## API (Backend)
 
-### Base URL
-```
-https://api.diemcredit.network/v1
-```
+Real implementation lives in `backend/`. Main surface:
 
-### Authentication
-API keys via `Authorization: Bearer <token>`
+- **Credits:** `POST /api/credits/request` (create escrow, optional auto-fund), `GET /api/credits`, `GET /api/credits/:id`, `GET /api/credits/:id/key` (buyer gets key once delivered).
+- **Delivery:** `POST /api/credits/:id/deliver` (backend returns key + keyHash; provider signs `deliverKey(escrowId, keyHash)` on-chain from their wallet), then `POST /api/credits/:id/mark-delivered`.
+- **Lifecycle:** `POST /api/credits/:id/confirm`, `POST /api/credits/:id/usage`, completion via contract + backend.
+- **Config:** `GET /api/config` (contract address, RPC for frontend), `GET /health`.
+- **Webhooks:** `POST /api/webhooks/subscribe`, `GET/DELETE /api/webhooks/subscriptions` (optional `WEBHOOK_ADMIN_SECRET` for auth). Outbound payloads are signed with `X-DACN-Signature` when a secret is set on subscribe.
 
-### Endpoints
-
-#### 1. List Capacity
-```http
-POST /listings
-Authorization: Bearer <provider_token>
-
-{
-  "diem_available": 5.0,        // DIEM tokens available
-  "price_per_diem": 0.95,       // USDC per DIEM (slight discount)
-  "min_purchase": 0.1,          // Minimum DIEM per transaction
-  "max_purchase": 2.0,          // Maximum DIEM per transaction
-  "duration_hours": 24          // Default duration
-}
-
-Response:
-{
-  "listing_id": "list_abc123",
-  "status": "active",
-  "expires_at": "2025-02-04T16:00:00Z"
-}
-```
-
-#### 2. Request Credit
-```http
-POST /escrows
-Authorization: Bearer <consumer_token>
-
-{
-  "listing_id": "list_abc123",
-  "diem_amount": 0.5,           // Requesting $0.50 of credit
-  "consumer_address": "0x...",
-  "webhook_url": "https://agent.example.com/webhook"
-}
-
-Response:
-{
-  "escrow_id": "esc_xyz789",
-  "status": "pending_provider",
-  "deposit_address": "0x...",
-  "amount_usdc": 475000,        // $0.475 (0.50 * 0.95)
-  "platform_fee": 4750,         // $0.00475 (1%)
-  "total_required": 479750      // $0.47975
-}
-```
-
-#### 3. Provider Confirms & Creates Key
-```http
-POST /escrows/{escrow_id}/confirm
-Authorization: Bearer <provider_token>
-
-{
-  "venice_api_key": "venice_..."  // Stored encrypted, never logged
-}
-
-Response:
-{
-  "status": "funded",
-  "api_key_id": "key_123",
-  "api_key_preview": "venice_...abc",  // Last 3 chars only
-  "expires_at": "2025-02-04T16:00:00Z"
-}
-```
-
-#### 4. Consumer Reports Usage
-```http
-POST /escrows/{escrow_id}/report
-Authorization: Bearer <consumer_token>
-
-{
-  "usage_diem": 0.32,           // Actually used $0.32
-  "request_logs": [
-    {
-      "timestamp": "2025-02-03T16:30:00Z",
-      "model": "llama-3.3-70b",
-      "tokens_input": 150,
-      "tokens_output": 450,
-      "cost_diem": 0.05,
-      "cf_ray": "8a3b2c..."
-    }
-  ]
-}
-
-Response:
-{
-  "status": "reported",
-  "provider_share": 316800,     // $0.3168 (0.32 * 0.95 * 0.99)
-  "platform_fee": 3200,         // $0.0032 (1% of usage)
-  "unused_penalty": 8500,       // $0.085 (5% of $0.18 unused)
-  "consumer_refund": 142500     // $0.1425 (remaining - penalty)
-}
-```
-
-#### 5. Provider Confirms & Release
-```http
-POST /escrows/{escrow_id}/confirm-release
-Authorization: Bearer <provider_token>
-
-{
-  "confirmed_usage": 0.32       // Agrees with consumer report
-}
-
-Response:
-{
-  "status": "completed",
-  "tx_hash": "0x...",           // On-chain release transaction
-  "provider_payout": 316800,
-  "platform_fee": 3200,
-  "penalty_to_provider": 8500
-}
-```
-
-#### 6. Query Escrow Status
-```http
-GET /escrows/{escrow_id}
-Authorization: Bearer <token>
-
-Response:
-{
-  "escrow_id": "esc_xyz789",
-  "status": "completed",
-  "provider": "0x...",
-  "consumer": "0x...",
-  "total_amount": 479750,
-  "usage_reported": 320000,
-  "created_at": "2025-02-03T16:00:00Z",
-  "completed_at": "2025-02-04T16:05:00Z"
-}
-```
-
----
+See `backend/README.md` and `SECURITY.md` (webhook auth) for details.
 
 ## Venice API Integration
 
@@ -408,5 +207,5 @@ usageLog.push({
 
 ---
 
-**Last Updated**: 2026-02-03
-**Status**: Design Phase
+**Last Updated**: 2026-02-04
+**Status**: Testnet-ready (Base Sepolia)

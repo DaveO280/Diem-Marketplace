@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import crypto from 'crypto';
 import { creditRepo } from '../repositories/credit';
 import { providerRepo } from '../repositories/provider';
 import { listingRepo } from '../repositories/listing';
@@ -10,6 +11,24 @@ import { Credit, CreditStatus } from '../types';
 import { ethers } from 'ethers';
 
 const router = Router();
+
+/** Create a real Venice key or a placeholder key so deliver flow always completes. */
+async function getOrCreateDeliveryKey(creditId: string, totalDiemAmount: number, durationDays: number): Promise<{ key: string; isPlaceholder: boolean }> {
+  if (veniceService.isConfigured) {
+    try {
+      const veniceKey = await veniceService.createLimitedKey(
+        `DACN-${creditId.slice(0, 8)}`,
+        totalDiemAmount,
+        durationDays
+      );
+      return { key: veniceKey.key, isPlaceholder: false };
+    } catch (e: any) {
+      console.warn('Venice key creation failed, using placeholder:', e?.message || e);
+    }
+  }
+  const placeholder = `dacn-placeholder-${creditId}-${crypto.randomBytes(16).toString('hex')}`;
+  return { key: placeholder, isPlaceholder: true };
+}
 
 const requestCreditSchema = z.object({
   providerId: z.string().uuid(),
@@ -289,17 +308,18 @@ router.post('/:id/prepare-deliver', async (req, res) => {
     return res.status(400).json({ error: 'escrowId required (fund escrow first so escrowId is stored)' });
   }
   try {
-    const veniceKey = await veniceService.createLimitedKey(
-      `DACN-${credit.id.slice(0, 8)}`,
+    const { key: apiKey, isPlaceholder } = await getOrCreateDeliveryKey(
+      credit.id,
       credit.totalDiemAmount,
       credit.durationDays
     );
-    const keyHash = ethers.keccak256(ethers.toUtf8Bytes(veniceKey.key));
-    creditRepo.updateStatus(credit.id, credit.status, { apiKey: veniceKey.key, apiKeyHash: keyHash });
+    const keyHash = ethers.keccak256(ethers.toUtf8Bytes(apiKey));
+    creditRepo.updateStatus(credit.id, credit.status, { apiKey, apiKeyHash: keyHash });
     res.json({
       escrowId,
       keyHash,
-      apiKey: veniceKey.key,
+      apiKey,
+      isPlaceholder,
       nextStep: 'Provider must call contract.deliverKey(escrowId, keyHash) from provider wallet, then give apiKey to buyer.',
     });
   } catch (error: any) {
@@ -321,7 +341,7 @@ router.post('/:id/mark-delivered', (req, res) => {
   res.json({ credit: updated });
 });
 
-// Deliver API key - Step 3: Provider delivers key (backend creates key when escrowId is on credit)
+// Deliver API key - Step 3a: Backend creates key and returns keyHash; provider must call contract.deliverKey from their wallet, then POST /:id/mark-delivered
 router.post('/:id/deliver', async (req, res) => {
   const credit = creditRepo.findById(req.params.id);
   if (!credit) {
@@ -334,41 +354,28 @@ router.post('/:id/deliver', async (req, res) => {
   }
 
   try {
-    // Create Venice limited key (backend creates key; no need for apiKey in body)
-    const veniceKey = await veniceService.createLimitedKey(
-      `DACN-${credit.id.slice(0, 8)}`,
+    // Create Venice limited key or placeholder
+    const { key: apiKey, isPlaceholder } = await getOrCreateDeliveryKey(
+      credit.id,
       credit.totalDiemAmount,
       credit.durationDays
     );
 
-    // Hash the key for on-chain storage
-    const keyHash = ethers.keccak256(ethers.toUtf8Bytes(veniceKey.key));
+    const keyHash = ethers.keccak256(ethers.toUtf8Bytes(apiKey));
 
-    // Deliver on-chain (msg.sender must be the escrow provider)
-    const receipt = await blockchainService.deliverKey(escrowId, keyHash);
+    // Store key/hash on credit; do NOT call contract here (only provider's wallet can call deliverKey)
+    creditRepo.updateStatus(credit.id, credit.status, { apiKey, apiKeyHash: keyHash });
 
-    // Update local record
-    const updated = creditRepo.updateStatus(credit.id, CreditStatus.KEY_DELIVERED, {
-      apiKey: veniceKey.key,
-      apiKeyHash: keyHash,
-    });
-
-    // Notify webhooks
-    notifyWebhook('credit.key_delivered', { 
-      credit: updated, 
+    res.json({
       escrowId,
-      apiKeyHash: keyHash 
-    }, { buyerAddress: credit.buyerAddress });
-
-    res.json({ 
-      credit: updated,
-      escrowId,
-      apiKey: veniceKey.key, // Return actual key to caller (provider gives to consumer)
-      txHash: receipt.hash
+      keyHash,
+      apiKey,
+      isPlaceholder,
+      nextStep: 'Sign the transaction in your wallet to deliver the key on-chain, then the dashboard will mark it delivered.',
     });
   } catch (error: any) {
-    console.error('Failed to deliver key:', error);
-    res.status(500).json({ error: error.message || 'Failed to deliver key' });
+    console.error('Failed to prepare deliver key:', error);
+    res.status(500).json({ error: error.message || 'Failed to prepare deliver key' });
   }
 });
 

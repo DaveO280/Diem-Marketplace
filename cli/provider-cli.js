@@ -29,7 +29,7 @@ const API_URL = process.env.DACN_API_URL || 'https://api.diemcredit.network/v1';
 const CONTRACTS = {
   baseSepolia: {
     escrow: process.env.ESCROW_CONTRACT || '',
-    usdc: '0x036CbD53842c5426634e7929541eC2318f3dCF7e'
+    usdc: '0x6Ac3aB54Dc5019A2e57eCcb214337FF5bbD52897'
   },
   baseMainnet: {
     escrow: '',

@@ -23,7 +23,7 @@
     
     const API_URL = (typeof window !== 'undefined' && window.location) ? (window.location.origin + '/api') : '/api';
     const ESCROW_CONTRACT = '0x...'; // Update after deployment
-    const USDC_CONTRACT = '0x036CbD53842c5426634e7929541eC2318f3dCF7e'; // Base Sepolia
+    const USDC_CONTRACT = '0x6Ac3aB54Dc5019A2e57eCcb214337FF5bbD52897'; // Base Sepolia testnet; mainnet differs
     
     let provider, signer, walletAddress;
     let veniceApiKey = localStorage.getItem('veniceApiKey') || '';
