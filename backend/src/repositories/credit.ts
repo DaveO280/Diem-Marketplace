@@ -10,19 +10,20 @@ export class CreditRepository {
     const stmt = db.prepare(`
       INSERT INTO credits 
       (id, credit_id, provider_id, buyer_address, total_diem_amount, actual_usage, 
-       duration_days, status, api_key, api_key_hash, created_at, expires_at, confirmed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       duration_days, status, escrow_id, api_key, api_key_hash, created_at, expires_at, confirmed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
       id,
-      credit.creditId ?? null,
+      credit.creditId && credit.creditId !== 0 ? credit.creditId : null,
       credit.providerId,
       credit.buyerAddress,
       credit.totalDiemAmount,
       credit.actualUsage ?? null,
       credit.durationDays,
       credit.status,
+      credit.escrowId ?? null,
       credit.apiKey ?? null,
       credit.apiKeyHash ?? null,
       now,
@@ -83,6 +84,10 @@ export class CreditRepository {
       sets.push('confirmed_at = ?');
       values.push(updates.confirmedAt);
     }
+    if (updates?.escrowId !== undefined) {
+      sets.push('escrow_id = ?');
+      values.push(updates.escrowId);
+    }
 
     values.push(id);
 
@@ -101,13 +106,14 @@ export class CreditRepository {
   private mapRow(row: any): Credit {
     return {
       id: row.id,
-      creditId: row.credit_id,
+      creditId: row.credit_id ?? 0,
       providerId: row.provider_id,
       buyerAddress: row.buyer_address,
       totalDiemAmount: row.total_diem_amount,
       actualUsage: row.actual_usage,
       durationDays: row.duration_days,
       status: row.status as CreditStatus,
+      escrowId: row.escrow_id ?? null,
       apiKey: row.api_key,
       apiKeyHash: row.api_key_hash,
       createdAt: row.created_at,

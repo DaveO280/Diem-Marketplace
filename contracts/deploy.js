@@ -9,9 +9,8 @@ async function main() {
   console.log("Deploying contracts with account:", deployer.address);
   console.log("Account balance:", (await deployer.getBalance()).toString());
 
-  // USDC on Base Sepolia
-  // Using a test USDC contract address (replace with official testnet USDC if different)
-  const USDC_ADDRESS = process.env.USDC_ADDRESS || "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+  // USDC on Base Sepolia (mintable test token; FiatToken 0x036CbD... is not minter-accessible)
+  const USDC_ADDRESS = process.env.USDC_ADDRESS || "0x6ac3ab54dc5019a2e57eccb214337ff5bbd52897";
   
   console.log("Using USDC at:", USDC_ADDRESS);
 

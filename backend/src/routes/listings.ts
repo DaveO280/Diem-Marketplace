@@ -14,7 +14,7 @@ const createListingSchema = z.object({
   maxPurchase: z.number().positive().optional(),
 });
 
-// List listings: ?provider=:id or ?address=0x... (by wallet)
+// List listings: no params = browse all (for agents); ?provider=:id or ?address=0x... = filter by provider/wallet
 router.get('/', (req, res) => {
   const { provider: providerId, address } = req.query;
 
@@ -32,7 +32,17 @@ router.get('/', (req, res) => {
     return res.json({ listings });
   }
 
-  return res.status(400).json({ error: 'Provide provider (provider id) or address (wallet address)' });
+  // No params: return all active listings with provider info so agents can discover and request credit
+  const listings = listingRepo.findAllActive();
+  const enriched = listings.map((l) => {
+    const provider = providerRepo.findById(l.providerId);
+    return {
+      ...l,
+      providerAddress: provider?.address ?? null,
+      providerName: provider?.name ?? null,
+    };
+  });
+  return res.json({ listings: enriched });
 });
 
 // Get one listing

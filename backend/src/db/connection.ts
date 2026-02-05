@@ -104,6 +104,19 @@ export function initializeDatabase(): void {
     )
   `);
 
+  // Add escrow_id to credits if missing (migration)
+  try {
+    const info = db.prepare('PRAGMA table_info(credits)').all() as { name: string }[];
+    if (!info.some((c) => c.name === 'escrow_id')) {
+      db.exec(`ALTER TABLE credits ADD COLUMN escrow_id TEXT`);
+    }
+  } catch (_) {}
+
+  // Allow multiple new credits: treat placeholder 0 as NULL (UNIQUE allows multiple NULLs)
+  try {
+    db.prepare('UPDATE credits SET credit_id = NULL WHERE credit_id = 0').run();
+  } catch (_) {}
+
   // Create indexes
   db.exec(`CREATE INDEX IF NOT EXISTS idx_credits_provider ON credits(provider_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_credits_buyer ON credits(buyer_address)`);

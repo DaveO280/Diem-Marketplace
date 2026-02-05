@@ -49,6 +49,12 @@ export class ListingRepository {
     return rows.map(this.mapRow);
   }
 
+  /** All active listings (for agent / marketplace discovery) */
+  findAllActive(): Listing[] {
+    const rows = db.prepare('SELECT * FROM listings WHERE is_active = 1 ORDER BY created_at DESC').all() as any[];
+    return rows.map(this.mapRow);
+  }
+
   update(id: string, updates: Partial<Omit<Listing, 'id' | 'providerId' | 'createdAt' | 'updatedAt'>>): Listing | null {
     const listing = this.findById(id);
     if (!listing) return null;

@@ -216,17 +216,14 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
     }
     
     /**
-     * @notice Consumer can verify they received the correct key
+     * @notice Consumer confirms they received the API key. Key is never submitted on-chain (only hash is stored).
      * @param _escrowId Escrow ID
-     * @param _apiKey API key received from provider
      */
-    function confirmKeyReceipt(bytes32 _escrowId, string calldata _apiKey)
+    function confirmKeyReceipt(bytes32 _escrowId)
         external
         onlyConsumer(_escrowId)
         inStatus(_escrowId, Status.Active)
     {
-        require(verifyApiKey(_escrowId, _apiKey), "Invalid API key");
-        
         emit KeyVerified(_escrowId, msg.sender);
     }
     

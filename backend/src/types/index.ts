@@ -30,6 +30,7 @@ export interface Credit {
   actualUsage: number | null;
   durationDays: number;
   status: CreditStatus;
+  escrowId: string | null; // On-chain escrow id (set after createEscrow / fund)
   apiKey: string | null;
   apiKeyHash: string | null;
   createdAt: string;

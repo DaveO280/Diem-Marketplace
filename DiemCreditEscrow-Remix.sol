@@ -300,12 +300,12 @@ contract DiemCreditEscrow is ReentrancyGuard, Ownable {
         return providedHash == escrow.apiKeyHash;
     }
     
-    function confirmKeyReceipt(bytes32 _escrowId, string calldata _apiKey)
+    /// @notice Consumer confirms they received the API key. Key is never submitted on-chain (only hash is stored).
+    function confirmKeyReceipt(bytes32 _escrowId)
         external
         onlyConsumer(_escrowId)
         inStatus(_escrowId, Status.Active)
     {
-        require(verifyApiKey(_escrowId, _apiKey), "Invalid API key");
         emit KeyVerified(_escrowId, msg.sender);
     }
     

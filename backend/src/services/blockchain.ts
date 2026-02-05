@@ -2,8 +2,8 @@ import { ethers, Interface, Log } from 'ethers';
 import { config } from '../config';
 import DiemCreditEscrowABI from '../abis/DiemCreditEscrow.json';
 
-// USDC on Base Sepolia
-const USDC_ADDRESS = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
+// USDC on Base Sepolia (mintable test token; set USDC_ADDRESS in .env to override)
+const DEFAULT_USDC = '0x6ac3ab54dc5019a2e57eccb214337ff5bbd52897';
 
 // ERC20 ABI for USDC
 const ERC20_ABI = [
@@ -48,7 +48,8 @@ class BlockchainService {
   constructor() {
     this.provider = new ethers.JsonRpcProvider(config.blockchain.rpcUrl);
     this.contractInterface = new Interface(DiemCreditEscrowABI as ethers.InterfaceAbi);
-    this.usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, this.provider);
+    const usdcAddress = config.blockchain.usdcAddress || DEFAULT_USDC;
+    this.usdcContract = new ethers.Contract(usdcAddress, ERC20_ABI, this.provider);
 
     const addr = (config.blockchain.contractAddress || '').trim();
     if (addr && addr !== ZERO_ADDRESS) {
@@ -109,6 +110,22 @@ class BlockchainService {
   }
 
   /**
+   * Approve the escrow contract to spend USDC from the backend wallet.
+   * Call this once (or when you get "transfer amount exceeds allowance").
+   * @param amount Amount to approve (default: max uint256 so one approval covers all escrows)
+   */
+  async approveUsdcForEscrow(amount?: bigint): Promise<ethers.TransactionReceipt> {
+    if (!this.wallet) {
+      throw new Error('Wallet not configured');
+    }
+    const contract = this.ensureContract();
+    const contractAddress = contract.target as string;
+    const approveAmount = amount ?? (2n ** 256n - 1n); // max uint256
+    const tx = await this.usdcContract.approve(contractAddress, approveAmount);
+    return await tx.wait();
+  }
+
+  /**
    * Fund an escrow with USDC (consumer)
    */
   async fundEscrow(escrowId: string): Promise<ethers.TransactionReceipt> {
@@ -118,7 +135,6 @@ class BlockchainService {
 
     const contract = this.ensureContract();
     const contractAddress = contract.target as string;
-    // First approve USDC transfer
     const escrow = await this.getEscrow(escrowId);
     const currentAllowance = await this.usdcContract.allowance(
       this.wallet.address,
@@ -126,11 +142,8 @@ class BlockchainService {
     );
 
     if (currentAllowance < escrow.amount) {
-      const approveTx = await this.usdcContract.approve(
-        contractAddress,
-        escrow.amount
-      );
-      await approveTx.wait();
+      const receipt = await this.approveUsdcForEscrow(escrow.amount);
+      if (!receipt) throw new Error('USDC approval failed');
     }
 
     const tx = await contract.fundEscrow(escrowId);

@@ -95,6 +95,20 @@ app.get('/health', async (req: Request, res: Response) => {
   }
 });
 
+// One-time USDC approval for escrow (backend wallet = buyer). Call this if funding fails with "transfer amount exceeds allowance".
+app.post('/api/approve-usdc', async (req: Request, res: Response) => {
+  try {
+    const receipt = await blockchainService.approveUsdcForEscrow();
+    res.json({
+      txHash: receipt.hash,
+      message: 'Escrow contract is now approved to spend USDC from the backend wallet. You can retry POST /api/credits/:id/fund.',
+    });
+  } catch (error: any) {
+    console.error('Approve USDC failed:', error);
+    res.status(500).json({ error: error.message || 'Failed to approve USDC' });
+  }
+});
+
 // API routes
 app.use('/api/providers', providersRouter);
 app.use('/api/credits', creditsRouter);

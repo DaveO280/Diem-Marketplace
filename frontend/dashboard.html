@@ -123,6 +123,7 @@
             <!-- Active Listings -->
             <div class="lg:col-span-2 bg-white rounded-2xl shadow p-6">
               <h3 class="text-lg font-semibold text-gray-800 mb-4">Active Credits</h3>
+              <p class="text-xs text-gray-500 mb-2">Credits stay <strong>requested</strong> until the buyer funds the escrow; then they become <strong>created</strong> and <strong>Deliver API Key</strong> appears. (If you are also the provider wallet in the backend, that button will submit the key on-chain.)</p>
               <div id="credits-container" class="space-y-3">
                 <p class="text-gray-500">Loading credits...</p>
               </div>
@@ -208,7 +209,7 @@
           `;
         }
 
-        // Load credits
+        // Load credits (as provider)
         const creditsRes = await fetch(`${API_URL}/api/credits?provider=${myProvider?.id || ''}`);
         const credits = await creditsRes.json();
         
@@ -229,6 +230,8 @@
                 <button onclick="deliverKey('${c.id}')" class="mt-2 text-sm bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700">
                   Deliver API Key
                 </button>
+              ` : c.status === 'requested' ? `
+                <p class="mt-2 text-xs text-amber-600">Waiting for buyer to fund escrow — then &quot;Deliver API Key&quot; will appear.</p>
               ` : ''}
             </div>
           `).join('');
@@ -236,6 +239,12 @@
           document.getElementById('credits-container').innerHTML = 
             '<p class="text-gray-500">No active credits yet.</p>';
         }
+
+        // Earnings: credits where key was delivered or completed (revenue in USDC wei -> /1e6 for display)
+        const ratePerDiem = myProvider?.ratePerDiem || 0;
+        const earningCredits = (credits.credits || []).filter(c => ['key_delivered', 'confirmed', 'usage_reported', 'completed'].includes(c.status));
+        const earningsUsdcWei = earningCredits.reduce((sum, c) => sum + c.totalDiemAmount * ratePerDiem, 0);
+        const earningsDisplay = (earningsUsdcWei / 1e6).toFixed(2);
 
         // Update stats
         document.getElementById('stats-container').innerHTML = `
@@ -251,6 +260,11 @@
             <div class="bg-purple-50 rounded-xl p-4">
               <p class="text-sm text-purple-600 font-medium">Total Volume</p>
               <p class="text-3xl font-bold text-purple-900">${credits.credits?.reduce((sum, c) => sum + c.totalDiemAmount, 0) || 0} DIEM</p>
+            </div>
+            <div class="lg:col-span-3 bg-amber-50 rounded-xl p-4">
+              <p class="text-sm text-amber-700 font-medium">Earnings (from key_delivered onward)</p>
+              <p class="text-2xl font-bold text-amber-900">${earningsDisplay} USDC</p>
+              <p class="text-xs text-amber-600 mt-1">${earningCredits.length} credit(s) with key delivered or completed</p>
             </div>
           </div>
           <div class="mt-4 text-xs text-gray-400">

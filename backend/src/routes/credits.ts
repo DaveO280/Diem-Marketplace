@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { creditRepo } from '../repositories/credit';
 import { providerRepo } from '../repositories/provider';
+import { listingRepo } from '../repositories/listing';
 import { blockchainService, EscrowStatus } from '../services/blockchain';
 import { veniceService } from '../services/venice';
 import { notifyWebhook } from './webhooks';
@@ -15,10 +16,25 @@ const requestCreditSchema = z.object({
   buyerAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
   diemAmount: z.number().int().positive(), // in cents (100 = $1.00 DIEM)
   durationDays: z.number().int().positive().max(365),
+  listingId: z.string().uuid().optional(), // when provided, reduces listing capacity and uses listing rate
 });
 
 const reportUsageSchema = z.object({
   usageAmount: z.number().int().nonnegative(),
+});
+
+// One-time USDC approval for escrow (backend wallet = buyer)
+router.post('/approve-usdc', async (req, res) => {
+  try {
+    const receipt = await blockchainService.approveUsdcForEscrow();
+    res.json({
+      txHash: receipt.hash,
+      message: 'Escrow contract approved to spend USDC. Retry POST /api/credits/:id/fund.',
+    });
+  } catch (error: any) {
+    console.error('Approve USDC failed:', error);
+    res.status(500).json({ error: error.message || 'Failed to approve USDC' });
+  }
 });
 
 // Get credit quote (no blockchain interaction)
@@ -75,6 +91,21 @@ router.get('/', (req, res) => {
   res.json({ credits });
 });
 
+// Get API key for a credit (buyer use: once key is delivered) — must be before GET /:id
+router.get('/:id/key', (req, res) => {
+  const credit = creditRepo.findById(req.params.id);
+  if (!credit) {
+    return res.status(404).json({ error: 'Credit not found' });
+  }
+  if (credit.status !== CreditStatus.KEY_DELIVERED && credit.status !== CreditStatus.CONFIRMED) {
+    return res.status(400).json({ error: 'Key not yet delivered for this credit' });
+  }
+  if (!credit.apiKey) {
+    return res.status(404).json({ error: 'No key stored for this credit' });
+  }
+  res.json({ apiKey: credit.apiKey });
+});
+
 // Get credit by ID
 router.get('/:id', (req, res) => {
   const credit = creditRepo.findById(req.params.id);
@@ -91,7 +122,7 @@ router.post('/request', async (req, res) => {
     return res.status(400).json({ error: parseResult.error.format() });
   }
 
-  const { providerId, buyerAddress, diemAmount, durationDays } = parseResult.data;
+  const { providerId, buyerAddress, diemAmount, durationDays, listingId } = parseResult.data;
 
   // Validate provider
   const provider = providerRepo.findById(providerId);
@@ -99,9 +130,37 @@ router.post('/request', async (req, res) => {
     return res.status(404).json({ error: 'Provider not found or inactive' });
   }
 
+  const backendWallet = blockchainService.getAddress();
+  if (backendWallet && backendWallet.toLowerCase() === provider.address.toLowerCase()) {
+    return res.status(400).json({
+      error: 'Cannot request credit from yourself. The backend wallet is the same as the listing provider. Use a different wallet as PRIVATE_KEY (the buyer) to test.',
+    });
+  }
+
+  let ratePerDiem = provider.ratePerDiem;
+  let listing: { id: string; providerId: string; diemAmount: number; isActive: boolean } | null = null;
+
+  if (listingId) {
+    const listingRow = listingRepo.findById(listingId);
+    if (!listingRow) {
+      return res.status(404).json({ error: 'Listing not found' });
+    }
+    if (listingRow.providerId !== providerId) {
+      return res.status(400).json({ error: 'Listing does not belong to this provider' });
+    }
+    if (!listingRow.isActive) {
+      return res.status(400).json({ error: 'Listing is no longer active' });
+    }
+    if (listingRow.diemAmount < diemAmount) {
+      return res.status(400).json({ error: 'Listing has insufficient capacity' });
+    }
+    listing = listingRow;
+    ratePerDiem = listingRow.ratePerDiem;
+  }
+
   try {
-    // Calculate amounts
-    const rate = BigInt(provider.ratePerDiem);
+    // Calculate amounts (use listing rate when listingId provided)
+    const rate = BigInt(ratePerDiem);
     const subtotal = BigInt(diemAmount) * rate;
     const platformFeeBps = await blockchainService.getPlatformFeeBps();
     const platformFee = (subtotal * BigInt(platformFeeBps)) / BigInt(10000);
@@ -120,30 +179,56 @@ router.post('/request', async (req, res) => {
 
     // Create local record
     const credit = creditRepo.create({
-      creditId: 0, // Will be set when funded (we store escrowId in separate field)
+      creditId: 0,
       providerId,
       buyerAddress,
       totalDiemAmount: diemAmount,
       actualUsage: null,
       durationDays,
       status: CreditStatus.REQUESTED,
+      escrowId: null,
       apiKey: null,
       apiKeyHash: null,
       expiresAt: new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString(),
     });
 
-    // Store the escrowId separately (could add to DB schema)
-    // For now, we'll use the credit's id as reference and store escrowId in a map
-    // In production, add escrowId column to credits table
+    creditRepo.updateStatus(credit.id, credit.status, { escrowId });
 
-    // Notify webhooks
-    notifyWebhook('credit.created', { credit, escrowId }, { buyerAddress });
+    // Reduce listing capacity when created from a specific listing
+    if (listing && listingId) {
+      const newAmount = listing.diemAmount - diemAmount;
+      listingRepo.update(listingId, {
+        diemAmount: newAmount,
+        isActive: newAmount > 0,
+      });
+    }
 
-    res.status(201).json({ 
-      credit,
+    // Auto-fund: backend wallet is the on-chain consumer (created the escrow), so fund now
+    let updated = creditRepo.findById(credit.id)!;
+    let fundingError: string | undefined;
+    try {
+      const receipt = await blockchainService.fundEscrow(escrowId);
+      updated = creditRepo.updateStatus(credit.id, CreditStatus.CREATED, { escrowId })!;
+      notifyWebhook('credit.funded', { credit: updated, escrowId }, { buyerAddress: credit.buyerAddress });
+      return res.status(201).json({
+        credit: updated,
+        escrowId,
+        txHash: receipt.hash,
+        nextStep: 'Provider can deliver API key',
+        fundAmount: totalAmount.toString(),
+      });
+    } catch (err: any) {
+      fundingError = err.message || 'Failed to fund escrow';
+      console.error('Auto-fund failed:', err);
+    }
+
+    notifyWebhook('credit.created', { credit: updated, escrowId }, { buyerAddress });
+    res.status(201).json({
+      credit: updated,
       escrowId,
       nextStep: 'fundEscrow',
-      fundAmount: totalAmount.toString()
+      fundAmount: totalAmount.toString(),
+      fundingError: fundingError ? `Escrow created but funding failed: ${fundingError}. Ensure backend wallet has USDC and retry POST /credits/:id/fund with body { "escrowId": "<escrowId>" }.` : undefined,
     });
   } catch (error: any) {
     console.error('Failed to create credit:', error);
@@ -171,9 +256,9 @@ router.post('/:id/fund', async (req, res) => {
     // Fund the escrow on-chain
     const receipt = await blockchainService.fundEscrow(escrowId);
     
-    // Update local record
+    // Update local record (store escrowId so deliver/prepare-deliver can use it)
     const updated = creditRepo.updateStatus(credit.id, CreditStatus.CREATED, {
-      apiKeyHash: escrowId // Store escrowId for reference
+      escrowId,
     });
 
     // Notify webhooks
@@ -190,20 +275,66 @@ router.post('/:id/fund', async (req, res) => {
   }
 });
 
-// Deliver API key - Step 3: Provider delivers key hash
+// Prepare deliver - Create Venice key and return keyHash so provider can call deliverKey on-chain from their wallet
+router.post('/:id/prepare-deliver', async (req, res) => {
+  const credit = creditRepo.findById(req.params.id);
+  if (!credit) {
+    return res.status(404).json({ error: 'Credit not found' });
+  }
+  if (credit.status !== CreditStatus.CREATED && credit.status !== CreditStatus.REQUESTED) {
+    return res.status(400).json({ error: 'Credit not in CREATED state (fund escrow first)' });
+  }
+  const escrowId = credit.escrowId ?? req.body?.escrowId;
+  if (!escrowId) {
+    return res.status(400).json({ error: 'escrowId required (fund escrow first so escrowId is stored)' });
+  }
+  try {
+    const veniceKey = await veniceService.createLimitedKey(
+      `DACN-${credit.id.slice(0, 8)}`,
+      credit.totalDiemAmount,
+      credit.durationDays
+    );
+    const keyHash = ethers.keccak256(ethers.toUtf8Bytes(veniceKey.key));
+    creditRepo.updateStatus(credit.id, credit.status, { apiKey: veniceKey.key, apiKeyHash: keyHash });
+    res.json({
+      escrowId,
+      keyHash,
+      apiKey: veniceKey.key,
+      nextStep: 'Provider must call contract.deliverKey(escrowId, keyHash) from provider wallet, then give apiKey to buyer.',
+    });
+  } catch (error: any) {
+    console.error('Failed to prepare deliver:', error);
+    res.status(500).json({ error: error.message || 'Failed to prepare deliver' });
+  }
+});
+
+// Mark key delivered - After provider has submitted deliverKey on-chain, call this to update DB
+router.post('/:id/mark-delivered', (req, res) => {
+  const credit = creditRepo.findById(req.params.id);
+  if (!credit) {
+    return res.status(404).json({ error: 'Credit not found' });
+  }
+  if (!credit.apiKeyHash) {
+    return res.status(400).json({ error: 'Call prepare-deliver first' });
+  }
+  const updated = creditRepo.updateStatus(credit.id, CreditStatus.KEY_DELIVERED, {});
+  res.json({ credit: updated });
+});
+
+// Deliver API key - Step 3: Provider delivers key (backend creates key when escrowId is on credit)
 router.post('/:id/deliver', async (req, res) => {
   const credit = creditRepo.findById(req.params.id);
   if (!credit) {
     return res.status(404).json({ error: 'Credit not found' });
   }
 
-  const { escrowId, apiKey } = req.body;
-  if (!escrowId || !apiKey) {
-    return res.status(400).json({ error: 'escrowId and apiKey required' });
+  const escrowId = credit.escrowId ?? req.body?.escrowId;
+  if (!escrowId) {
+    return res.status(400).json({ error: 'escrowId required (fund escrow first so escrowId is stored)' });
   }
 
   try {
-    // Create Venice limited key
+    // Create Venice limited key (backend creates key; no need for apiKey in body)
     const veniceKey = await veniceService.createLimitedKey(
       `DACN-${credit.id.slice(0, 8)}`,
       credit.totalDiemAmount,
@@ -213,7 +344,7 @@ router.post('/:id/deliver', async (req, res) => {
     // Hash the key for on-chain storage
     const keyHash = ethers.keccak256(ethers.toUtf8Bytes(veniceKey.key));
 
-    // Deliver on-chain
+    // Deliver on-chain (msg.sender must be the escrow provider)
     const receipt = await blockchainService.deliverKey(escrowId, keyHash);
 
     // Update local record

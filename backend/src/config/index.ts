@@ -15,7 +15,7 @@ export const config = {
     rpcUrl: process.env.RPC_URL || 'https://sepolia.base.org',
     contractAddress: process.env.CONTRACT_ADDRESS || '',
     privateKey: process.env.PRIVATE_KEY || '',
-    usdcAddress: process.env.USDC_ADDRESS || '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+    usdcAddress: process.env.USDC_ADDRESS || '0x6ac3ab54dc5019a2e57eccb214337ff5bbd52897',
   },
   venice: {
     apiKey: process.env.VENICE_API_KEY || '',
