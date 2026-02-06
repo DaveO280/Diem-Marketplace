@@ -110,11 +110,15 @@ router.get('/', (req, res) => {
   res.json({ credits });
 });
 
-// Get API key for a credit (buyer use: once key is delivered) — must be before GET /:id
+// Get API key for a credit (buyer only: once key is delivered)
 router.get('/:id/key', (req, res) => {
   const credit = creditRepo.findById(req.params.id);
   if (!credit) {
     return res.status(404).json({ error: 'Credit not found' });
+  }
+  const buyerAddress = (req.headers['x-buyer-address'] as string)?.trim();
+  if (!buyerAddress || buyerAddress.toLowerCase() !== credit.buyerAddress.toLowerCase()) {
+    return res.status(403).json({ error: 'Only the buyer can retrieve the API key. Send X-Buyer-Address header matching the credit buyer.' });
   }
   if (credit.status !== CreditStatus.KEY_DELIVERED && credit.status !== CreditStatus.CONFIRMED) {
     return res.status(400).json({ error: 'Key not yet delivered for this credit' });
@@ -430,9 +434,10 @@ router.post('/:id/usage', async (req, res) => {
     return res.status(400).json({ error: 'Credit not active' });
   }
 
-  const { escrowId, usageAmount } = req.body;
+  const usageAmount = parseResult.data.usageAmount;
+  const escrowId = (req.body as { escrowId?: string }).escrowId ?? credit.escrowId;
   if (!escrowId) {
-    return res.status(400).json({ error: 'escrowId required' });
+    return res.status(400).json({ error: 'escrowId required (fund escrow first)' });
   }
 
   if (usageAmount > credit.totalDiemAmount) {

@@ -1,8 +1,25 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { providerRepo } from '../repositories/provider';
+import { blockchainService } from '../services/blockchain';
 
 const router = Router();
+
+// USD credited through escrow (on-chain withdrawable balance) — before /:id
+router.get('/earnings', async (req, res) => {
+  const address = (req.query.address as string)?.trim();
+  if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
+    return res.status(400).json({ error: 'Query parameter address (0x...) required' });
+  }
+  try {
+    const balanceWei = await blockchainService.getProviderBalance(address);
+    const balanceUsdc = (Number(balanceWei) / 1e6).toFixed(2);
+    res.json({ balanceWei: balanceWei.toString(), balanceUsdc });
+  } catch (e: any) {
+    console.error('Earnings lookup failed:', e);
+    res.status(500).json({ error: e.message || 'Failed to fetch provider balance' });
+  }
+});
 
 const createProviderSchema = z.object({
   address: z.string().regex(/^0x[a-fA-F0-9]{40}$/),

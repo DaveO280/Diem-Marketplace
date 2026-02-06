@@ -378,10 +378,10 @@
             headers: { 'Authorization': `Bearer ${veniceApiKey}` }
           });
           const data = await res.json();
-          const diem = data.data?.diemBalance || 0;
-          document.getElementById('diem-balance').textContent = diem.toFixed(2);
-          document.getElementById('diem-usd-value').textContent = diem.toFixed(2);
-          document.getElementById('max-diem').textContent = diem.toFixed(2);
+          const diem = data.data?.balances?.DIEM ?? data.data?.diemBalance ?? 0;
+          document.getElementById('diem-balance').textContent = Number(diem).toFixed(2);
+          document.getElementById('diem-usd-value').textContent = Number(diem).toFixed(2);
+          document.getElementById('max-diem').textContent = Number(diem).toFixed(2);
         } catch (e) {
           console.error('Failed to load DIEM:', e);
         }
@@ -436,8 +436,46 @@
         `;
       }
 
-      document.getElementById('total-earnings').textContent = '$0.00';
-      document.getElementById('lifetime-volume').textContent = '0 DIEM';
+      // Earnings: USD credited through escrow (on-chain provider balance)
+      try {
+        const earnRes = await fetch(API_URL + '/providers/earnings?address=' + encodeURIComponent(walletAddress));
+        const earnData = await earnRes.json();
+        if (!earnData.error && earnData.balanceUsdc != null) {
+          document.getElementById('total-earnings').textContent = '$' + earnData.balanceUsdc;
+        } else {
+          document.getElementById('total-earnings').textContent = '$0.00';
+        }
+      } catch (_) {
+        document.getElementById('total-earnings').textContent = '$0.00';
+      }
+
+      // Recent earnings: credits where key was delivered or completed (provider view)
+      try {
+        const provRes = await fetch(API_URL + '/providers');
+        const { providers } = await provRes.json();
+        const myProvider = (providers || []).find(function (p) { return p.address && p.address.toLowerCase() === walletAddress.toLowerCase(); });
+        if (myProvider) {
+          const credRes = await fetch(API_URL + '/credits?provider=' + encodeURIComponent(myProvider.id));
+          const { credits } = await credRes.json();
+          const earningCredits = (credits || []).filter(function (c) { return ['key_delivered', 'confirmed', 'usage_reported', 'completed'].includes(c.status); });
+          const lifetimeDiem = (credits || []).reduce(function (sum, c) { return sum + (c.totalDiemAmount || 0); }, 0);
+          document.getElementById('lifetime-volume').textContent = lifetimeDiem + ' DIEM';
+          var container = document.getElementById('earnings-container');
+          if (container) {
+            if (earningCredits.length === 0) {
+              container.innerHTML = '<p class="text-gray-500 text-center py-8">No earnings yet</p>';
+            } else {
+              container.innerHTML = earningCredits.slice(0, 10).map(function (c) {
+                return '<div class="border rounded-lg p-2 text-sm"><span class="font-medium">Credit ' + (c.id || '').slice(0, 8) + '</span> · ' + (c.totalDiemAmount || 0) + ' DIEM · ' + (c.status || '') + '</div>';
+              }).join('');
+            }
+          }
+        } else {
+          document.getElementById('lifetime-volume').textContent = '0 DIEM';
+        }
+      } catch (_) {
+        document.getElementById('lifetime-volume').textContent = '0 DIEM';
+      }
     }
     
     async function getVeniceDiemBalance() {
@@ -447,7 +485,8 @@
           headers: { 'Authorization': 'Bearer ' + veniceApiKey }
         });
         const data = await res.json();
-        return data.data?.diemBalance != null ? Number(data.data.diemBalance) : null;
+        const bal = data.data?.balances?.DIEM ?? data.data?.diemBalance;
+        return bal != null ? Number(bal) : null;
       } catch (e) {
         return null;
       }
