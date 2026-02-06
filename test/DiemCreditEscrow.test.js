@@ -1,6 +1,15 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
 
+// Support both ethers v5 (utils) and v6 (top-level)
+if (!ethers.utils) {
+  ethers.utils = {
+    parseUnits: (v, u) => ethers.parseUnits(String(v), Number(u)),
+    keccak256: (b) => ethers.keccak256(b),
+    toUtf8Bytes: (s) => ethers.toUtf8Bytes(s)
+  };
+}
+
 describe('DiemCreditEscrow', function () {
   let escrow, usdc, owner, provider, consumer;
   const PLATFORM_FEE_BPS = 100; // 1%
@@ -8,17 +17,18 @@ describe('DiemCreditEscrow', function () {
   
   beforeEach(async function () {
     [owner, provider, consumer] = await ethers.getSigners();
-    
+    const usdcAddr = (a) => a?.target ?? a?.address;
+
     // Deploy mock USDC
     const MockERC20 = await ethers.getContractFactory('MockERC20');
     usdc = await MockERC20.deploy('USD Coin', 'USDC', 6);
-    await usdc.deployed();
-    
+    if (usdc.waitForDeployment) await usdc.waitForDeployment(); else await usdc.deployed();
+
     // Deploy escrow
     const DiemCreditEscrow = await ethers.getContractFactory('DiemCreditEscrow');
-    escrow = await DiemCreditEscrow.deploy(usdc.address);
-    await escrow.deployed();
-    
+    escrow = await DiemCreditEscrow.deploy(usdcAddr(usdc));
+    if (escrow.waitForDeployment) await escrow.waitForDeployment(); else await escrow.deployed();
+
     // Mint USDC to consumer
     await usdc.mint(consumer.address, ethers.utils.parseUnits('1000', 6));
   });
@@ -64,6 +74,19 @@ describe('DiemCreditEscrow', function () {
           0
         )
       ).to.be.revertedWith('Cannot escrow with self');
+    });
+
+    it('Should fail if amount exceeds max escrow cap', async function () {
+      const maxAmt = await escrow.maxEscrowAmount();
+      const overMax = typeof maxAmt === 'bigint' ? maxAmt + 1n : maxAmt.add(1);
+      await expect(
+        escrow.connect(consumer).createEscrow(
+          provider.address,
+          100,
+          overMax,
+          0
+        )
+      ).to.be.revertedWith('Amount exceeds max escrow cap');
     });
   });
 
@@ -123,14 +146,26 @@ describe('DiemCreditEscrow', function () {
       await escrow.connect(provider).deliverKey(escrowId, keyHash);
     });
     
-    it('Should complete escrow with partial usage', async function () {
+    it('Should complete escrow with partial usage after dispute window', async function () {
       const usage = 50; // Used $0.50 of $1.00
       
       // Consumer reports
       await escrow.connect(consumer).reportUsage(escrowId, usage);
       
-      // Provider confirms
-      await expect(escrow.connect(provider).reportUsage(escrowId, usage))
+      // Provider confirms (sets completionUnlockTime; does not complete immediately)
+      await escrow.connect(provider).reportUsage(escrowId, usage);
+      
+      const escrowDataBefore = await escrow.getEscrow(escrowId);
+      expect(Number(escrowDataBefore.status)).to.equal(2); // Still Active
+      const unlock = escrowDataBefore.completionUnlockTime ?? escrowDataBefore[11];
+      expect(Number(unlock)).to.be.gt(0);
+
+      // Advance time past completion delay (1 hour)
+      await ethers.provider.send('evm_increaseTime', [3600 + 1]);
+      await ethers.provider.send('evm_mine', []);
+
+      // Anyone can call executeCompletion after dispute window
+      await expect(escrow.connect(consumer).executeCompletion(escrowId))
         .to.emit(escrow, 'EscrowCompleted');
       
       const escrowData = await escrow.getEscrow(escrowId);
@@ -151,6 +186,10 @@ describe('DiemCreditEscrow', function () {
     it('Should handle full usage', async function () {
       await escrow.connect(consumer).reportUsage(escrowId, diemLimit);
       await escrow.connect(provider).reportUsage(escrowId, diemLimit);
+      
+      await ethers.provider.send('evm_increaseTime', [3600 + 1]);
+      await ethers.provider.send('evm_mine', []);
+      await escrow.connect(provider).executeCompletion(escrowId);
       
       const providerBalance = await escrow.providerBalances(provider.address);
       // 0.95 * 1.0 = 0.95 used
@@ -189,6 +228,9 @@ describe('DiemCreditEscrow', function () {
       
       await escrow.connect(consumer).reportUsage(escrowId, 100);
       await escrow.connect(provider).reportUsage(escrowId, 100);
+      await ethers.provider.send('evm_increaseTime', [3600 + 1]);
+      await ethers.provider.send('evm_mine', []);
+      await escrow.connect(consumer).executeCompletion(escrowId);
       
       // Withdraw
       const balanceBefore = await usdc.balanceOf(provider.address);

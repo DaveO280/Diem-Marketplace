@@ -45,6 +45,13 @@
   },
   {
     "inputs": [{ "internalType": "bytes32", "name": "_escrowId", "type": "bytes32" }],
+    "name": "executeCompletion",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "bytes32", "name": "_escrowId", "type": "bytes32" }],
     "name": "getEscrow",
     "outputs": [{
       "components": [
@@ -58,7 +65,8 @@
         { "internalType": "bytes32", "name": "apiKeyHash", "type": "bytes32" },
         { "internalType": "uint256", "name": "reportedUsage", "type": "uint256" },
         { "internalType": "bool", "name": "providerConfirmed", "type": "bool" },
-        { "internalType": "bool", "name": "consumerConfirmed", "type": "bool" }
+        { "internalType": "bool", "name": "consumerConfirmed", "type": "bool" },
+        { "internalType": "uint256", "name": "completionUnlockTime", "type": "uint256" }
       ],
       "internalType": "struct DiemCreditEscrow.Escrow",
       "name": "",

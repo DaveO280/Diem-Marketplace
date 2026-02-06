@@ -34,6 +34,7 @@ export interface Escrow {
   reportedUsage: bigint;
   providerConfirmed: boolean;
   consumerConfirmed: boolean;
+  completionUnlockTime?: bigint;
 }
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
@@ -82,7 +83,7 @@ class BlockchainService {
    */
   async createEscrow(
     providerAddress: string,
-    diemLimitCents: number,
+    diemLimitCents: number, // hundredths of DIEM (100 = 1 DIEM); contract uses this unit
     amountUSDC: bigint,
     durationSeconds: number = 0
   ): Promise<string> {
@@ -165,7 +166,7 @@ class BlockchainService {
   /**
    * Report usage (honest oracle - both parties)
    */
-  async reportUsage(escrowId: string, usageCents: number): Promise<ethers.TransactionReceipt> {
+  async reportUsage(escrowId: string, usageCents: number): Promise<ethers.TransactionReceipt> { // usage in hundredths of DIEM (10 = 0.1 DIEM)
     if (!this.wallet) {
       throw new Error('Wallet not configured');
     }
@@ -191,8 +192,20 @@ class BlockchainService {
       apiKeyHash: result.apiKeyHash,
       reportedUsage: result.reportedUsage,
       providerConfirmed: result.providerConfirmed,
-      consumerConfirmed: result.consumerConfirmed
+      consumerConfirmed: result.consumerConfirmed,
+      completionUnlockTime: result.completionUnlockTime ?? 0n
     };
+  }
+
+  /**
+   * Execute completion after dispute window (anyone can call on-chain after completionUnlockTime)
+   */
+  async executeCompletion(escrowId: string): Promise<ethers.TransactionReceipt> {
+    if (!this.wallet) {
+      throw new Error('Wallet not configured');
+    }
+    const tx = await this.ensureContract().executeCompletion(escrowId);
+    return await tx.wait();
   }
 
   /**

@@ -21,6 +21,12 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
     
     // Default escrow duration (24 hours = DIEM epoch)
     uint256 public defaultDuration = 24 hours;
+
+    // Max USDC per escrow (6 decimals); limits exposure (e.g. 10_000 USDC)
+    uint256 public maxEscrowAmount = 10_000 * 1e6;
+
+    // Delay before completion can be executed after both parties confirm (dispute window)
+    uint256 public completionDelay = 1 hours;
     
     enum Status { 
         Pending,      // Created, waiting for funding
@@ -43,6 +49,7 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         uint256 reportedUsage;    // Amount actually used (in cents)
         bool providerConfirmed;
         bool consumerConfirmed;
+        uint256 completionUnlockTime; // When both confirmed, earliest time executeCompletion can run (dispute window)
     }
     
     mapping(bytes32 => Escrow) public escrows;
@@ -121,6 +128,7 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         require(_provider != msg.sender, "Cannot escrow with self");
         require(_diemLimit > 0, "DIEM limit must be > 0");
         require(_amount > 0, "Amount must be > 0");
+        require(_amount <= maxEscrowAmount, "Amount exceeds max escrow cap");
         
         uint256 duration = _duration == 0 ? defaultDuration : _duration;
         
@@ -143,7 +151,8 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
             apiKeyHash: bytes32(0),
             reportedUsage: 0,
             providerConfirmed: false,
-            consumerConfirmed: false
+            consumerConfirmed: false,
+            completionUnlockTime: 0
         });
         
         allEscrowIds.push(escrowId);
@@ -159,6 +168,7 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
      */
     function fundEscrow(bytes32 _escrowId) 
         external 
+        whenNotPaused
         nonReentrant 
         onlyConsumer(_escrowId)
         inStatus(_escrowId, Status.Pending) 
@@ -185,6 +195,7 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
      */
     function deliverKey(bytes32 _escrowId, bytes32 _apiKeyHash)
         external
+        whenNotPaused
         onlyProvider(_escrowId)
         inStatus(_escrowId, Status.Funded)
     {
@@ -234,6 +245,8 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
      */
     function reportUsage(bytes32 _escrowId, uint256 _usage)
         external
+        whenNotPaused
+        nonReentrant
         inStatus(_escrowId, Status.Active)
     {
         Escrow storage escrow = escrows[_escrowId];
@@ -254,10 +267,25 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         
         emit UsageReported(_escrowId, _usage);
         
-        // If both confirmed, auto-complete
-        if (escrow.consumerConfirmed && escrow.providerConfirmed) {
-            _completeEscrow(_escrowId);
+        // When both confirmed, set completion unlock time (dispute window); do not complete immediately
+        if (escrow.consumerConfirmed && escrow.providerConfirmed && escrow.completionUnlockTime == 0) {
+            escrow.completionUnlockTime = block.timestamp + completionDelay;
         }
+    }
+
+    /**
+     * @notice Execute completion after dispute window (anyone can call after unlock)
+     */
+    function executeCompletion(bytes32 _escrowId)
+        external
+        whenNotPaused
+        nonReentrant
+    {
+        Escrow storage escrow = escrows[_escrowId];
+        require(escrow.status == Status.Active, "Not active");
+        require(escrow.consumerConfirmed && escrow.providerConfirmed, "Both must confirm first");
+        require(escrow.completionUnlockTime > 0 && block.timestamp >= escrow.completionUnlockTime, "Dispute window not over");
+        _completeEscrow(_escrowId);
     }
     
     /**
@@ -335,7 +363,7 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         bytes32 _escrowId,
         uint256 _providerAmount,
         uint256 _consumerAmount
-    ) external onlyOwner inStatus(_escrowId, Status.Disputed) {
+    ) external onlyOwner whenNotPaused nonReentrant inStatus(_escrowId, Status.Disputed) {
         Escrow storage escrow = escrows[_escrowId];
         
         require(
@@ -362,6 +390,7 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
      */
     function refundExpired(bytes32 _escrowId)
         external
+        whenNotPaused
         nonReentrant
         inStatus(_escrowId, Status.Funded)
     {
@@ -381,6 +410,7 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
      */
     function autoComplete(bytes32 _escrowId)
         external
+        whenNotPaused
         nonReentrant
         inStatus(_escrowId, Status.Active)
     {
@@ -399,7 +429,7 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
     /**
      * @notice Provider withdraws their accumulated balance
      */
-    function withdrawProviderBalance() external nonReentrant {
+    function withdrawProviderBalance() external whenNotPaused nonReentrant {
         uint256 amount = providerBalances[msg.sender];
         require(amount > 0, "No balance");
         
@@ -482,6 +512,11 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         require(!paused, "Contract is paused");
         _;
     }
+
+    modifier whenPaused() {
+        require(paused, "Contract not paused");
+        _;
+    }
     
     /**
      * @notice Emergency pause - can be called immediately by owner
@@ -513,6 +548,33 @@ contract DiemCreditEscrow is ReentrancyGuard, TimelockController {
         paused = false;
         unpauseScheduledTime = 0;
         emit Unpaused();
+    }
+
+    /**
+     * @notice Set max USDC per escrow (owner only; limits exposure)
+     */
+    function setMaxEscrowAmount(uint256 _max) external onlyOwner {
+        require(_max >= 1e6, "Max must be at least 1 USDC");
+        maxEscrowAmount = _max;
+    }
+
+    /**
+     * @notice Set completion delay / dispute window (owner only)
+     */
+    function setCompletionDelay(uint256 _delay) external onlyOwner {
+        completionDelay = _delay;
+    }
+
+    /**
+     * @notice Emergency refund: when paused, owner can refund escrow to consumer (kill switch)
+     */
+    function emergencyRefund(bytes32 _escrowId) external onlyOwner whenPaused nonReentrant {
+        Escrow storage escrow = escrows[_escrowId];
+        require(escrow.status == Status.Funded || escrow.status == Status.Active, "Invalid status");
+        require(escrow.amount > 0, "No funds");
+        escrow.status = Status.Refunded;
+        require(usdc.transfer(escrow.consumer, escrow.amount), "Refund failed");
+        emit EscrowRefunded(_escrowId, escrow.amount);
     }
     
     /**

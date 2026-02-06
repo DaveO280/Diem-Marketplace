@@ -33,7 +33,7 @@ async function getOrCreateDeliveryKey(creditId: string, totalDiemAmount: number,
 const requestCreditSchema = z.object({
   providerId: z.string().uuid(),
   buyerAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
-  diemAmount: z.number().int().positive(), // in cents (100 = $1.00 DIEM)
+  diemAmount: z.number().int().positive(), // whole DIEM units (1 = 1 DIEM). Usage is in hundredths (100 = 1 DIEM, 10 = 0.1 DIEM).
   durationDays: z.number().int().positive().max(365),
   listingId: z.string().uuid().optional(), // when provided, reduces listing capacity and uses listing rate
 });
@@ -71,9 +71,9 @@ router.get('/quote', async (req, res) => {
 
   const diem = parseInt(diemAmount as string);
   const days = parseInt(durationDays as string);
-  const rate = provider.ratePerDiem; // USDC wei per DIEM cent
-  
-  // Calculate: diem cents * rate = total USDC needed
+  const rate = provider.ratePerDiem; // USDC per 1 DIEM — set by provider; determines $ per DIEM
+
+  // Total USDC = whole DIEM × rate; e.g. 1 DIEM at 300.01 → 300.01 USDC; 0.1 DIEM → 30.001 USDC
   const subtotal = BigInt(diem) * BigInt(rate);
   const platformFeeBps = await blockchainService.getPlatformFeeBps();
   const fee = (subtotal * BigInt(platformFeeBps)) / BigInt(10000);
@@ -153,10 +153,10 @@ router.post('/request', async (req, res) => {
     return res.status(404).json({ error: 'Provider not found or inactive' });
   }
 
-  const backendWallet = blockchainService.getAddress();
-  if (backendWallet && backendWallet.toLowerCase() === provider.address.toLowerCase()) {
+  // Prevent self-dealing: buyer cannot request credit from their own provider address
+  if (buyerAddress.toLowerCase() === provider.address.toLowerCase()) {
     return res.status(400).json({
-      error: 'Cannot request credit from yourself. The backend wallet is the same as the listing provider. Use a different wallet as PRIVATE_KEY (the buyer) to test.',
+      error: 'Cannot request credit from yourself. The buyer wallet is the same as the listing provider.',
     });
   }
 
@@ -190,12 +190,13 @@ router.post('/request', async (req, res) => {
     const totalAmount = subtotal + platformFee;
     const durationSeconds = durationDays * 24 * 60 * 60;
 
+    // Contract uses hundredths of DIEM (100 = 1 DIEM). API uses whole DIEM, so convert.
+    const diemLimitCents = diemAmount * 100;
+
     // Create on-chain escrow
-    // Note: In production, this would be signed by the consumer's wallet
-    // For the API, we're simulating with the backend wallet
     const escrowId = await blockchainService.createEscrow(
       provider.address,
-      diemAmount,
+      diemLimitCents,
       totalAmount,
       durationSeconds
     );
@@ -440,7 +441,9 @@ router.post('/:id/usage', async (req, res) => {
     return res.status(400).json({ error: 'escrowId required (fund escrow first)' });
   }
 
-  if (usageAmount > credit.totalDiemAmount) {
+  // totalDiemAmount = whole DIEM (1 = 1 DIEM). usageAmount = hundredths of DIEM (10 = 0.1 DIEM). Price paid is set by provider (ratePerDiem).
+  const limitHundredths = credit.totalDiemAmount * 100;
+  if (usageAmount > limitHundredths) {
     return res.status(400).json({ error: 'Usage exceeds credit limit' });
   }
 
@@ -485,7 +488,7 @@ router.post('/:id/usage', async (req, res) => {
   }
 });
 
-// Complete credit (manual trigger to check chain status)
+// Complete credit (check chain status; if both confirmed and dispute window over, call executeCompletion)
 router.post('/:id/complete', async (req, res) => {
   const credit = creditRepo.findById(req.params.id);
   if (!credit) {
@@ -498,23 +501,37 @@ router.post('/:id/complete', async (req, res) => {
   }
 
   try {
-    // Check on-chain status
-    const escrow = await blockchainService.getEscrow(escrowId);
-    
+    let escrow = await blockchainService.getEscrow(escrowId);
+
+    // If Active with both confirmed and dispute window passed, execute completion on-chain
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const unlockTime = escrow.completionUnlockTime ? Number(escrow.completionUnlockTime) : 0;
+    if (
+      escrow.status === EscrowStatus.Active &&
+      escrow.providerConfirmed &&
+      escrow.consumerConfirmed &&
+      unlockTime > 0 &&
+      nowSeconds >= unlockTime
+    ) {
+      await blockchainService.executeCompletion(escrowId);
+      escrow = await blockchainService.getEscrow(escrowId);
+    }
+
     if (escrow.status === EscrowStatus.Completed) {
       const updated = creditRepo.updateStatus(credit.id, CreditStatus.COMPLETED);
-      
-      notifyWebhook('credit.completed', { credit: updated, escrowId }, 
+
+      notifyWebhook('credit.completed', { credit: updated, escrowId },
         { buyerAddress: credit.buyerAddress });
-      
+
       return res.json({ credit: updated, escrowId, status: 'completed' });
     }
 
-    res.json({ 
-      credit, 
-      escrowId, 
+    res.json({
+      credit,
+      escrowId,
       status: 'pending',
-      chainStatus: EscrowStatus[escrow.status]
+      chainStatus: EscrowStatus[escrow.status],
+      completionUnlockTime: unlockTime > 0 ? unlockTime : undefined
     });
   } catch (error: any) {
     console.error('Failed to check completion:', error);
