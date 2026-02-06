@@ -27,6 +27,8 @@
     
     let provider, signer, walletAddress;
     let veniceApiKey = localStorage.getItem('veniceApiKey') || '';
+    var hideInactiveListings = false;
+    var lastListings = null;
 
     function escapeHtml(s) {
       if (s == null) return '';
@@ -163,9 +165,15 @@
     function ListingsSection() {
       return `
         <div class="lg:col-span-2 card rounded-2xl shadow-lg p-6">
-          <div class="flex justify-between items-center mb-4">
+          <div class="flex flex-wrap justify-between items-center gap-2 mb-4">
             <h3 class="text-lg font-semibold text-gray-800">Your Listings</h3>
-            <button onclick="refreshListings()" class="text-sm text-indigo-600 hover:text-indigo-800">🔄 Refresh</button>
+            <div class="flex items-center gap-4">
+              <label class="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
+                <input type="checkbox" id="hide-inactive-toggle" ${hideInactiveListings ? 'checked' : ''} onchange="toggleHideInactive(this.checked)">
+                Hide Inactive
+              </label>
+              <button onclick="refreshListings()" class="text-sm text-indigo-600 hover:text-indigo-800">🔄 Refresh</button>
+            </div>
           </div>
           <div id="listings-container" class="space-y-3">
             <p class="text-gray-500 text-center py-8">Loading...</p>
@@ -392,39 +400,9 @@
         const listRes = await fetch(API_URL + '/listings?address=' + encodeURIComponent(walletAddress));
         const { listings } = await listRes.json();
         const list = listings || [];
-
+        lastListings = list;
         document.getElementById('active-listings').textContent = String(list.length);
-
-        if (list.length > 0) {
-          document.getElementById('listings-container').innerHTML = list.map(function (l) {
-            const rateUsdc = (l.ratePerDiem / 1e6).toFixed(2);
-            const minMax = l.minPurchase != null || l.maxPurchase != null
-              ? ' · Min ' + (l.minPurchase ?? 0) + ' / Max ' + (l.maxPurchase ?? '—')
-              : '';
-            return `
-            <div class="border rounded-xl p-4 bg-white/50 hover:bg-white/70 transition">
-              <div class="flex justify-between items-start flex-wrap gap-2">
-                <div>
-                  <p class="font-medium text-gray-800">${l.diemAmount} DIEM · ${rateUsdc} USDC/DIEM${minMax}</p>
-                  <p class="text-xs text-gray-400 mt-1">Created ${new Date(l.createdAt).toLocaleDateString()}</p>
-                </div>
-                <span class="px-2 py-1 rounded-full text-xs font-medium ${l.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}">${l.isActive ? 'Active' : 'Inactive'}</span>
-              </div>
-              <p class="text-xs text-gray-400 mt-2">Buyers can request credit from this listing.</p>
-            </div>
-            `;
-          }).join('') + `
-            <div class="pt-2">
-              <button onclick="showCreateListing()" class="text-sm text-indigo-600 hover:text-indigo-800">+ Add another listing</button>
-            </div>`;
-        } else {
-          document.getElementById('listings-container').innerHTML = `
-            <div class="text-center py-8 text-gray-500">
-              <p>No listings yet</p>
-              <button onclick="showCreateListing()" class="mt-2 text-indigo-600 hover:underline">Create your first listing</button>
-            </div>
-          `;
-        }
+        document.getElementById('listings-container').innerHTML = getListingsContainerHtml(list);
       } catch (e) {
         console.error('Failed to load listings:', e);
         document.getElementById('active-listings').textContent = '-';
@@ -552,6 +530,30 @@
     
     function refreshListings() {
       loadData();
+    }
+
+    function toggleHideInactive(checked) {
+      hideInactiveListings = !!checked;
+      if (lastListings != null) {
+        var container = document.getElementById('listings-container');
+        if (container) container.innerHTML = getListingsContainerHtml(lastListings);
+      }
+    }
+
+    function getListingsContainerHtml(list) {
+      var listToShow = hideInactiveListings ? list.filter(function (l) { return l.isActive; }) : list;
+      if (list.length === 0) {
+        return '<div class="text-center py-8 text-gray-500"><p>No listings yet</p><button onclick="showCreateListing()" class="mt-2 text-indigo-600 hover:underline">Create your first listing</button></div>';
+      }
+      var rateUsdc = function (l) { return (l.ratePerDiem / 1e6).toFixed(2); };
+      var minMax = function (l) {
+        return l.minPurchase != null || l.maxPurchase != null ? ' · Min ' + (l.minPurchase ?? 0) + ' / Max ' + (l.maxPurchase ?? '—') : '';
+      };
+      var rows = listToShow.map(function (l) {
+        return '<div class="border rounded-xl p-4 bg-white/50 hover:bg-white/70 transition"><div class="flex justify-between items-start flex-wrap gap-2"><div><p class="font-medium text-gray-800">' + l.diemAmount + ' DIEM · ' + rateUsdc(l) + ' USDC/DIEM' + minMax(l) + '</p><p class="text-xs text-gray-400 mt-1">Created ' + new Date(l.createdAt).toLocaleDateString() + '</p></div><span class="px-2 py-1 rounded-full text-xs font-medium ' + (l.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600') + '">' + (l.isActive ? 'Active' : 'Inactive') + '</span></div><p class="text-xs text-gray-400 mt-2">Buyers can request credit from this listing.</p></div>';
+      }).join('');
+      var emptyFiltered = listToShow.length === 0 ? '<div class="text-center py-6 text-gray-500"><p>No active listings. Uncheck "Hide Inactive" to see all, or create a new listing.</p></div>' : '';
+      return rows + emptyFiltered + '<div class="pt-2"><button onclick="showCreateListing()" class="text-sm text-indigo-600 hover:text-indigo-800">+ Add another listing</button></div>';
     }
     
     function render() {

@@ -33,13 +33,22 @@ async function getOrCreateDeliveryKey(creditId: string, totalDiemAmount: number,
 const requestCreditSchema = z.object({
   providerId: z.string().uuid(),
   buyerAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
-  diemAmount: z.number().int().positive(), // whole DIEM units (1 = 1 DIEM). Usage is in hundredths (100 = 1 DIEM, 10 = 0.1 DIEM).
+  diemAmount: z.number().positive(), // DIEM units (1 = 1 DIEM, 0.1 = 0.1 DIEM). Stored as hundredths when fractional.
   durationDays: z.number().int().positive().max(365),
   listingId: z.string().uuid().optional(), // when provided, reduces listing capacity and uses listing rate
 });
 
 const reportUsageSchema = z.object({
   usageAmount: z.number().int().nonnegative(),
+  escrowId: z.string().regex(/^0x[a-fA-F0-9]{64}$/).optional(),
+});
+
+const escrowIdRequiredSchema = z.object({
+  escrowId: z.string().regex(/^0x[a-fA-F0-9]{64}$/),
+});
+
+const escrowIdOptionalSchema = z.object({
+  escrowId: z.string().regex(/^0x[a-fA-F0-9]{64}$/).optional(),
 });
 
 // One-time USDC approval for escrow (backend wallet = buyer)
@@ -69,15 +78,20 @@ router.get('/quote', async (req, res) => {
     return res.status(404).json({ error: 'Provider not found' });
   }
 
-  const diem = parseInt(diemAmount as string);
+  const diem = parseFloat(diemAmount as string);
   const days = parseInt(durationDays as string);
+  if (isNaN(diem) || diem <= 0) {
+    return res.status(400).json({ error: 'diemAmount must be a positive number (e.g. 1 or 0.1)' });
+  }
   const rate = provider.ratePerDiem; // USDC per 1 DIEM — set by provider; determines $ per DIEM
 
-  // Total USDC = whole DIEM × rate; e.g. 1 DIEM at 300.01 → 300.01 USDC; 0.1 DIEM → 30.001 USDC
-  const subtotal = BigInt(diem) * BigInt(rate);
+  // Total USDC = diem × rate; e.g. 1 DIEM at 300.01 → 300.01 USDC; 0.1 DIEM → 30.001 USDC
+  const subtotal = BigInt(Math.round(diem * Number(rate)));
   const platformFeeBps = await blockchainService.getPlatformFeeBps();
   const fee = (subtotal * BigInt(platformFeeBps)) / BigInt(10000);
   const total = subtotal + fee;
+  const durationSeconds = days * 24 * 60 * 60;
+  const diemLimitCents = Math.round(diem * 100);
 
   res.json({
     quote: {
@@ -88,6 +102,12 @@ router.get('/quote', async (req, res) => {
       subtotal: subtotal.toString(),
       platformFee: fee.toString(),
       totalCost: total.toString(),
+      escrowParams: {
+        providerAddress: provider.address,
+        diemLimitCents,
+        amountWei: total.toString(),
+        durationSeconds,
+      },
     }
   });
 });
@@ -184,14 +204,14 @@ router.post('/request', async (req, res) => {
   try {
     // Calculate amounts (use listing rate when listingId provided)
     const rate = BigInt(ratePerDiem);
-    const subtotal = BigInt(diemAmount) * rate;
+    const subtotal = BigInt(Math.round(diemAmount * Number(ratePerDiem)));
     const platformFeeBps = await blockchainService.getPlatformFeeBps();
     const platformFee = (subtotal * BigInt(platformFeeBps)) / BigInt(10000);
     const totalAmount = subtotal + platformFee;
     const durationSeconds = durationDays * 24 * 60 * 60;
 
-    // Contract uses hundredths of DIEM (100 = 1 DIEM). API uses whole DIEM, so convert.
-    const diemLimitCents = diemAmount * 100;
+    // Contract uses hundredths of DIEM (100 = 1 DIEM, 10 = 0.1 DIEM).
+    const diemLimitCents = Math.round(diemAmount * 100);
 
     // Create on-chain escrow
     const escrowId = await blockchainService.createEscrow(
@@ -218,9 +238,9 @@ router.post('/request', async (req, res) => {
 
     creditRepo.updateStatus(credit.id, credit.status, { escrowId });
 
-    // Reduce listing capacity when created from a specific listing
+    // Reduce listing capacity when created from a specific listing (listing.diemAmount is integer)
     if (listing && listingId) {
-      const newAmount = listing.diemAmount - diemAmount;
+      const newAmount = Math.max(0, Math.floor(listing.diemAmount - diemAmount));
       listingRepo.update(listingId, {
         diemAmount: newAmount,
         isActive: newAmount > 0,
@@ -260,6 +280,71 @@ router.post('/request', async (req, res) => {
   }
 });
 
+const registerEscrowSchema = z.object({
+  escrowId: z.string().regex(/^0x[a-fA-F0-9]{64}$/),
+  providerId: z.string().uuid(),
+  buyerAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
+  totalDiemAmount: z.number().positive(),
+  durationDays: z.number().int().positive().max(365),
+});
+
+// Register an escrow created and funded by the buyer (agent) on-chain. Creates a credit record so the provider can deliver the key.
+router.post('/register', async (req, res) => {
+  const parseResult = registerEscrowSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    return res.status(400).json({ error: parseResult.error.format() });
+  }
+  const { escrowId, providerId, buyerAddress, totalDiemAmount, durationDays } = parseResult.data;
+
+  const provider = providerRepo.findById(providerId);
+  if (!provider || !provider.isActive) {
+    return res.status(404).json({ error: 'Provider not found or inactive' });
+  }
+  if (buyerAddress.toLowerCase() === provider.address.toLowerCase()) {
+    return res.status(400).json({ error: 'Buyer cannot be the same as provider' });
+  }
+
+  const existing = creditRepo.findByEscrowId(escrowId);
+  if (existing) {
+    return res.status(200).json({ credit: existing, message: 'Escrow already registered' });
+  }
+
+  try {
+    const escrow = await blockchainService.getEscrow(escrowId);
+    if (escrow.status !== EscrowStatus.Funded && escrow.status !== EscrowStatus.Active) {
+      return res.status(400).json({
+        error: 'Escrow must be funded on-chain first. Create and fund the escrow from your wallet, then register.',
+      });
+    }
+    if (escrow.consumer.toLowerCase() !== buyerAddress.toLowerCase()) {
+      return res.status(400).json({ error: 'Buyer address does not match escrow consumer on-chain' });
+    }
+    if (escrow.provider.toLowerCase() !== provider.address.toLowerCase()) {
+      return res.status(400).json({ error: 'Provider does not match escrow provider on-chain' });
+    }
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Invalid or unknown escrow' });
+  }
+
+  const expiresAt = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString();
+  const credit = creditRepo.create({
+    creditId: 0,
+    providerId,
+    buyerAddress,
+    totalDiemAmount,
+    actualUsage: null,
+    durationDays,
+    status: CreditStatus.CREATED,
+    escrowId,
+    apiKey: null,
+    apiKeyHash: null,
+    expiresAt,
+  });
+
+  notifyWebhook('credit.registered', { credit, escrowId }, { buyerAddress });
+  res.status(201).json({ credit, escrowId, nextStep: 'Provider can deliver API key' });
+});
+
 // Fund escrow - Step 2: Consumer funds the escrow
 router.post('/:id/fund', async (req, res) => {
   const credit = creditRepo.findById(req.params.id);
@@ -271,10 +356,11 @@ router.post('/:id/fund', async (req, res) => {
     return res.status(400).json({ error: 'Credit already funded or invalid status' });
   }
 
-  const { escrowId } = req.body;
-  if (!escrowId) {
-    return res.status(400).json({ error: 'escrowId required' });
+  const fundParse = escrowIdRequiredSchema.safeParse(req.body);
+  if (!fundParse.success) {
+    return res.status(400).json({ error: fundParse.error.format() });
   }
+  const { escrowId } = fundParse.data;
 
   try {
     // Fund the escrow on-chain
@@ -308,7 +394,11 @@ router.post('/:id/prepare-deliver', async (req, res) => {
   if (credit.status !== CreditStatus.CREATED && credit.status !== CreditStatus.REQUESTED) {
     return res.status(400).json({ error: 'Credit not in CREATED state (fund escrow first)' });
   }
-  const escrowId = credit.escrowId ?? req.body?.escrowId;
+  const prepParse = escrowIdOptionalSchema.safeParse(req.body);
+  if (!prepParse.success) {
+    return res.status(400).json({ error: prepParse.error.format() });
+  }
+  const escrowId = credit.escrowId ?? prepParse.data.escrowId;
   if (!escrowId) {
     return res.status(400).json({ error: 'escrowId required (fund escrow first so escrowId is stored)' });
   }
@@ -353,7 +443,11 @@ router.post('/:id/deliver', async (req, res) => {
     return res.status(404).json({ error: 'Credit not found' });
   }
 
-  const escrowId = credit.escrowId ?? req.body?.escrowId;
+  const deliverParse = escrowIdOptionalSchema.safeParse(req.body);
+  if (!deliverParse.success) {
+    return res.status(400).json({ error: deliverParse.error.format() });
+  }
+  const escrowId = credit.escrowId ?? deliverParse.data.escrowId;
   if (!escrowId) {
     return res.status(400).json({ error: 'escrowId required (fund escrow first so escrowId is stored)' });
   }
@@ -395,10 +489,11 @@ router.post('/:id/confirm', async (req, res) => {
     return res.status(400).json({ error: 'Key not yet delivered' });
   }
 
-  const { escrowId } = req.body;
-  if (!escrowId) {
-    return res.status(400).json({ error: 'escrowId required' });
+  const confirmParse = escrowIdRequiredSchema.safeParse(req.body);
+  if (!confirmParse.success) {
+    return res.status(400).json({ error: confirmParse.error.format() });
   }
+  const { escrowId } = confirmParse.data;
 
   try {
     // Update local record
@@ -436,7 +531,7 @@ router.post('/:id/usage', async (req, res) => {
   }
 
   const usageAmount = parseResult.data.usageAmount;
-  const escrowId = (req.body as { escrowId?: string }).escrowId ?? credit.escrowId;
+  const escrowId = parseResult.data.escrowId ?? credit.escrowId;
   if (!escrowId) {
     return res.status(400).json({ error: 'escrowId required (fund escrow first)' });
   }
@@ -495,10 +590,11 @@ router.post('/:id/complete', async (req, res) => {
     return res.status(404).json({ error: 'Credit not found' });
   }
 
-  const { escrowId } = req.body;
-  if (!escrowId) {
-    return res.status(400).json({ error: 'escrowId required' });
+  const completeParse = escrowIdRequiredSchema.safeParse(req.body);
+  if (!completeParse.success) {
+    return res.status(400).json({ error: completeParse.error.format() });
   }
+  const { escrowId } = completeParse.data;
 
   try {
     let escrow = await blockchainService.getEscrow(escrowId);

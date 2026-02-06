@@ -95,11 +95,12 @@ app.get('/health', async (req: Request, res: Response) => {
   }
 });
 
-// Public config for frontend (contract address, RPC) so provider can sign deliverKey from their wallet
+// Public config for frontend (contract address, RPC, USDC) so agents can create/fund escrows and providers can sign deliverKey
 app.get('/api/config', (_req: Request, res: Response) => {
   res.json({
     contractAddress: config.blockchain.contractAddress || null,
     rpcUrl: config.blockchain.rpcUrl || 'https://sepolia.base.org',
+    usdcAddress: config.blockchain.usdcAddress || '0x6Ac3aB54Dc5019A2e57eCcb214337FF5bbD52897',
   });
 });
 
@@ -117,14 +118,12 @@ app.post('/api/approve-usdc', async (req: Request, res: Response) => {
   }
 });
 
-// API routes
+// API routes (credit limiter must run before credits router so POST /api/credits/request is rate-limited)
+app.use('/api/credits/request', creditLimiter);
 app.use('/api/providers', providersRouter);
 app.use('/api/credits', creditsRouter);
 app.use('/api/webhooks', webhooksRouter);
 app.use('/api/listings', listingsRouter);
-
-// Apply stricter rate limit to credit requests
-app.use('/api/credits/request', creditLimiter);
 
 // Static frontend (index.html at /, dashboard.html at /dashboard.html)
 const publicDir = path.join(__dirname, '..', 'public');

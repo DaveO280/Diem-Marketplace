@@ -7,11 +7,13 @@ export class CreditRepository {
     const id = uuidv4();
     const now = new Date().toISOString();
 
+    const diemHundredths = Math.round(credit.totalDiemAmount * 100);
+    const diemWhole = Math.floor(credit.totalDiemAmount);
     const stmt = db.prepare(`
       INSERT INTO credits 
-      (id, credit_id, provider_id, buyer_address, total_diem_amount, actual_usage, 
+      (id, credit_id, provider_id, buyer_address, total_diem_amount, total_diem_hundredths, actual_usage, 
        duration_days, status, escrow_id, api_key, api_key_hash, created_at, expires_at, confirmed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -19,7 +21,8 @@ export class CreditRepository {
       credit.creditId && credit.creditId !== 0 ? credit.creditId : null,
       credit.providerId,
       credit.buyerAddress,
-      credit.totalDiemAmount,
+      diemWhole,
+      diemHundredths,
       credit.actualUsage ?? null,
       credit.durationDays,
       credit.status,
@@ -64,6 +67,11 @@ export class CreditRepository {
     return rows.map(this.mapRow);
   }
 
+  findByEscrowId(escrowId: string): Credit | null {
+    const row = db.prepare('SELECT * FROM credits WHERE escrow_id = ?').get(escrowId) as any;
+    return row ? this.mapRow(row) : null;
+  }
+
   updateStatus(id: string, status: CreditStatus, updates?: Partial<Credit>): Credit | null {
     const sets = ['status = ?'];
     const values: any[] = [status];
@@ -104,12 +112,15 @@ export class CreditRepository {
   }
 
   private mapRow(row: any): Credit {
+    const totalDiemAmount = row.total_diem_hundredths != null
+      ? row.total_diem_hundredths / 100
+      : row.total_diem_amount;
     return {
       id: row.id,
       creditId: row.credit_id ?? 0,
       providerId: row.provider_id,
       buyerAddress: row.buyer_address,
-      totalDiemAmount: row.total_diem_amount,
+      totalDiemAmount,
       actualUsage: row.actual_usage,
       durationDays: row.duration_days,
       status: row.status as CreditStatus,

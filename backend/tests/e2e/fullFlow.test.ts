@@ -29,7 +29,7 @@ jest.mock('../../src/services/blockchain', () => ({
       provider: '0xProviderE2E12345678901234567890123456789012',
       consumer: '0xBuyerE2E1234567890123456789012345678901234',
       amount: BigInt(4750000),
-      diemLimit: BigInt(5000),
+      diemLimit: BigInt(10),
       status: mockEscrowStatus,
       apiKeyHash: '0xe2ekeyhash',
       reportedUsage: BigInt(3500),
@@ -103,7 +103,7 @@ describe('E2E: Full Escrow Flow', () => {
     console.log('Step 2: Getting price quote');
 
     const quoteRes = await request(app)
-      .get(`/api/credits/quote?providerId=${providerId}&diemAmount=5000&durationDays=7`)
+      .get(`/api/credits/quote?providerId=${providerId}&diemAmount=0.1&durationDays=7`)
       .expect(200);
 
     expect(quoteRes.body.quote).toBeDefined();
@@ -117,39 +117,31 @@ describe('E2E: Full Escrow Flow', () => {
       .send({
         providerId,
         buyerAddress: buyer.address,
-        diemAmount: 5000,
+        diemAmount: 0.1,
         durationDays: 7
       })
       .expect(201);
 
-    expect(requestRes.body.credit.status).toBe('requested');
+    expect(requestRes.body.credit.status).toBe('created');
     expect(requestRes.body.escrowId).toBe(mockEscrowId);
-    expect(requestRes.body.nextStep).toBe('fundEscrow');
+    expect(requestRes.body.nextStep).toContain('deliver');
     creditId = requestRes.body.credit.id;
-    console.log(`  ✓ Escrow created: ${mockEscrowId}`);
+    console.log(`  ✓ Escrow created and funded: ${mockEscrowId}`);
 
-    // Step 4: Fund escrow
-    console.log('Step 4: Funding escrow');
-
-    const fundRes = await request(app)
-      .post(`/api/credits/${creditId}/fund`)
-      .send({ escrowId: mockEscrowId })
-      .expect(200);
-
-    expect(fundRes.body.credit.status).toBe('created');
-    expect(fundRes.body.txHash).toBeDefined();
-    console.log('  ✓ Escrow funded');
-
-    // Step 5: Provider delivers key
-    console.log('Step 5: Delivering API key');
+    // Step 4: Provider delivers key (backend creates key, then mark-delivered)
+    console.log('Step 4: Delivering API key');
 
     const deliverRes = await request(app)
       .post(`/api/credits/${creditId}/deliver`)
-      .send({ escrowId: mockEscrowId, apiKey: 'test-api-key-e2e' })
+      .send({ escrowId: mockEscrowId })
       .expect(200);
 
-    expect(deliverRes.body.credit.status).toBe('key_delivered');
     expect(deliverRes.body.apiKey).toBeDefined();
+    expect(deliverRes.body.keyHash).toBeDefined();
+
+    await request(app)
+      .post(`/api/credits/${creditId}/mark-delivered`)
+      .expect(200);
     console.log('  ✓ API key delivered');
 
     // Step 6: Consumer confirms receipt
@@ -171,10 +163,10 @@ describe('E2E: Full Escrow Flow', () => {
 
     const usageRes = await request(app)
       .post(`/api/credits/${creditId}/usage`)
-      .send({ escrowId: mockEscrowId, usageAmount: 3500 })
+      .send({ escrowId: mockEscrowId, usageAmount: 10 })
       .expect(200);
 
-    expect(usageRes.body.credit.actualUsage).toBe(3500);
+    expect(usageRes.body.credit.actualUsage).toBe(10);
     expect(usageRes.body.status).toBe('completed');
     console.log('  ✓ Usage reported, escrow completed');
 
@@ -182,10 +174,12 @@ describe('E2E: Full Escrow Flow', () => {
   }, 30000);
 
   it('Cancellation before funding', async () => {
+    const { blockchainService } = await import('../../src/services/blockchain');
+    (blockchainService.fundEscrow as jest.Mock).mockRejectedValueOnce(new Error('fund failed'));
+
     const providerRes = await request(app)
       .post('/api/providers')
       .send(provider);
-    
     const pid = providerRes.body.provider.id;
 
     const requestRes = await request(app)
@@ -193,10 +187,11 @@ describe('E2E: Full Escrow Flow', () => {
       .send({
         providerId: pid,
         buyerAddress: buyer.address,
-        diemAmount: 5000,
+        diemAmount: 0.1,
         durationDays: 7
       });
 
+    expect(requestRes.body.credit.status).toBe('requested');
     const cid = requestRes.body.credit.id;
 
     const cancelRes = await request(app)
@@ -210,7 +205,6 @@ describe('E2E: Full Escrow Flow', () => {
     const providerRes = await request(app)
       .post('/api/providers')
       .send(provider);
-    
     const pid = providerRes.body.provider.id;
 
     const requestRes = await request(app)
@@ -218,15 +212,12 @@ describe('E2E: Full Escrow Flow', () => {
       .send({
         providerId: pid,
         buyerAddress: buyer.address,
-        diemAmount: 5000,
+        diemAmount: 0.1,
         durationDays: 7
       });
 
+    expect(requestRes.body.credit.status).toBe('created');
     const cid = requestRes.body.credit.id;
-
-    await request(app)
-      .post(`/api/credits/${cid}/fund`)
-      .send({ escrowId: mockEscrowId });
 
     const cancelRes = await request(app)
       .post(`/api/credits/${cid}/cancel`)

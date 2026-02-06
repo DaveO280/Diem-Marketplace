@@ -11,7 +11,9 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:e2e": "jest --testPathPattern=e2e",
-    "test:ci": "jest --ci --coverage --testTimeout=60000"
+    "test:ci": "jest --ci --coverage --testTimeout=60000",
+    "e2e:buyer-request": "node scripts/e2e-buyer-request-only.js",
+    "e2e:buyer-flow": "node scripts/e2e-buyer-flow.js"
   },
   "dependencies": {
     "better-sqlite3-multiple-ciphers": "^12.6.2",

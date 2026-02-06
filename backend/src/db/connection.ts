@@ -11,9 +11,10 @@ if (!fs.existsSync(dbDir)) {
 
 export const db: InstanceType<typeof Database> = new Database(config.database.path);
 
-// Encryption at rest: set key before any other statement (SQLite3 Multiple Ciphers)
+// Encryption at rest: set key before any other statement (SQLite3 Multiple Ciphers). Skip for in-memory DB.
+const dbPath = config.database.path;
 const encKey = config.database.encryptionKey;
-if (encKey && encKey.length > 0) {
+if (encKey && encKey.length > 0 && dbPath !== ':memory:') {
   const escaped = encKey.replace(/'/g, "''");
   db.pragma(`key='${escaped}'`);
 }
@@ -117,6 +118,9 @@ export function initializeDatabase(): void {
     if (!info.some((c) => c.name === 'escrow_id')) {
       db.exec(`ALTER TABLE credits ADD COLUMN escrow_id TEXT`);
     }
+    if (!info.some((c) => c.name === 'total_diem_hundredths')) {
+      db.exec(`ALTER TABLE credits ADD COLUMN total_diem_hundredths INTEGER`);
+    }
   } catch (_) {}
 
   // Allow multiple new credits: treat placeholder 0 as NULL (UNIQUE allows multiple NULLs)
@@ -128,5 +132,6 @@ export function initializeDatabase(): void {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_credits_provider ON credits(provider_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_credits_buyer ON credits(buyer_address)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_credits_status ON credits(status)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_credits_escrow_id ON credits(escrow_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_listings_provider ON listings(provider_id)`);
 }

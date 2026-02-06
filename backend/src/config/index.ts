@@ -26,7 +26,7 @@ export const config = {
     adminSecret: (process.env.WEBHOOK_ADMIN_SECRET || '').trim(),
   },
   platform: {
-    feeBasisPoints: parseInt(process.env.PLATFORM_FORM_FEE_BASIS_POINTS || '100'), // 1%
+    feeBasisPoints: parseInt(process.env.PLATFORM_FEE_BASIS_POINTS || '100'), // 1%
   },
 };
 

@@ -1,15 +1,15 @@
 /**
  * DIEM Agent Credit Network - Consumer SDK
  *
- * Uses the real DACN API: /api/credits/request, /api/credits/:id/key, /api/listings.
- * The backend creates and funds the escrow; the buyer only requests and then retrieves the key.
+ * Two flows:
+ * 1) Backend-funded: requestCredit() — backend creates and funds escrow; agent retrieves key.
+ * 2) Agent-funded: browseListings() → getQuote() → purchaseCreditWithDeposit() — agent creates
+ *    escrow, approves USDC, funds escrow, registers with API; then retrieves key when provider delivers.
  *
- * @example
- * const dacn = new DACNConsumer({
- *   apiUrl: 'http://localhost:3000',
- *   wallet: walletProvider
- * });
- * const credit = await dacn.requestCredit({ providerId: '...', diemAmount: 100, durationDays: 1 });
+ * @example (agent-funded)
+ * const dacn = new DACNConsumer({ apiUrl: 'http://localhost:3000', wallet: signer });
+ * const listings = await dacn.browseListings();
+ * const credit = await dacn.purchaseCreditWithDeposit({ providerId: listings[0].providerId, diemAmount: 1, durationDays: 1 });
  * const apiKey = await credit.getVeniceApiKey();
  */
 
@@ -93,13 +93,166 @@ class DACNConsumer {
   }
 
   /**
-   * Browse available listings (from /api/listings)
+   * Browse available listings (from /api/listings). Use for agent discovery.
    */
   async browseListings(filters = {}) {
     const params = new URLSearchParams();
     if (filters.address) params.set('address', filters.address);
+    if (filters.provider) params.set('provider', filters.provider);
     const result = await this._apiRequest(`/api/listings${params.toString() ? '?' + params : ''}`);
     return result.listings || [];
+  }
+
+  /**
+   * Get a price quote and escrow params for creating/funding an escrow on-chain.
+   * @returns {Promise<{ quote: object, escrowParams: { providerAddress, diemLimitCents, amountWei, durationSeconds } }>}
+   */
+  async getQuote(providerId, diemAmount, durationDays = 1) {
+    if (!providerId || !diemAmount || diemAmount <= 0) {
+      throw new DACNError('providerId and diemAmount (positive) are required', 'INVALID_QUOTE_PARAMS');
+    }
+    const params = new URLSearchParams({
+      providerId: String(providerId),
+      diemAmount: String(Math.floor(diemAmount)),
+      durationDays: String(Math.floor(durationDays)),
+    });
+    const result = await this._apiRequest(`/api/credits/quote?${params}`);
+    if (!result.quote || !result.quote.escrowParams) {
+      throw new DACNError('Invalid quote response: missing escrowParams', 'INVALID_RESPONSE', { body: result });
+    }
+    return result;
+  }
+
+  /**
+   * Get API config (contract address, RPC, USDC address) for on-chain transactions.
+   */
+  async getConfig() {
+    return this._apiRequest('/api/config');
+  }
+
+  /**
+   * Register an escrow that the agent already created and funded on-chain. Creates a credit record so the provider can deliver the key.
+   * @param {Object} params - escrowId, providerId, buyerAddress, totalDiemAmount, durationDays
+   * @returns {Promise<DACNCredit>}
+   */
+  async registerEscrow(params) {
+    const { escrowId, providerId, buyerAddress, totalDiemAmount, durationDays } = params;
+    if (!escrowId || !providerId || !buyerAddress || !totalDiemAmount || !durationDays) {
+      throw new DACNError('escrowId, providerId, buyerAddress, totalDiemAmount, durationDays are required', 'MISSING_PARAMS');
+    }
+    const result = await this._apiRequest('/api/credits/register', {
+      method: 'POST',
+      body: { escrowId, providerId, buyerAddress, totalDiemAmount, durationDays },
+    });
+    const credit = result.credit;
+    if (!credit || !credit.id) {
+      throw new DACNError('Invalid register response: missing credit', 'INVALID_RESPONSE', { body: result });
+    }
+    this.credits.set(credit.id, credit);
+    return new DACNCredit(credit, this);
+  }
+
+  /**
+   * Create escrow on-chain, approve USDC, fund escrow, then register with the API. Requires ethers (npm install ethers) and a signer that can send transactions.
+   * @param {Object} options - providerId, diemAmount, durationDays, listingId (optional), signer (optional; defaults to this.wallet)
+   * @returns {Promise<DACNCredit>}
+   */
+  async purchaseCreditWithDeposit(options) {
+    const { providerId, diemAmount, durationDays = 1, listingId, signer } = options;
+    if (!providerId || !diemAmount || diemAmount <= 0) {
+      throw new DACNError('providerId and diemAmount (positive) are required', 'INVALID_PARAMS');
+    }
+    const wallet = signer || this.wallet;
+    let buyerAddress;
+    try {
+      buyerAddress = await wallet.getAddress();
+    } catch (err) {
+      throw new DACNError('Wallet must expose getAddress()', 'WALLET_ERROR', { originalError: err.message });
+    }
+
+    const { quote } = await this.getQuote(providerId, diemAmount, durationDays);
+    const { escrowParams } = quote;
+    const config = await this.getConfig();
+    if (!config.contractAddress || !config.rpcUrl) {
+      throw new DACNError('API config missing contractAddress or rpcUrl', 'CONFIG_ERROR');
+    }
+
+    let ethers;
+    try {
+      ethers = typeof require !== 'undefined' ? require('ethers') : (typeof window !== 'undefined' && window.ethers);
+    } catch (_) {
+      // ignore
+    }
+    if (!ethers) {
+      throw new DACNError(
+        'purchaseCreditWithDeposit requires ethers. Install: npm install ethers',
+        'MISSING_ETHERS'
+      );
+    }
+
+    const provider = new ethers.JsonRpcProvider(config.rpcUrl);
+    const connectedWallet = wallet.connect ? wallet.connect(provider) : wallet;
+    const usdcAddress = config.usdcAddress || '0x6Ac3aB54Dc5019A2e57eCcb214337FF5bbD52897';
+
+    const escrowAbi = [
+      'function createEscrow(address _provider, uint256 _diemLimit, uint256 _amount, uint256 _duration) returns (bytes32)',
+      'function fundEscrow(bytes32 _escrowId)',
+      'event EscrowCreated(bytes32 indexed escrowId, address indexed provider, address indexed consumer, uint256 amount, uint256 diemLimit)',
+    ];
+    const erc20Abi = [
+      'function approve(address spender, uint256 amount) returns (bool)',
+      'function allowance(address owner, address spender) view returns (uint256)',
+    ];
+
+    const escrowContract = new ethers.Contract(config.contractAddress, escrowAbi, connectedWallet);
+    const usdc = new ethers.Contract(usdcAddress, erc20Abi, connectedWallet);
+
+    const diemLimitCents = Number(escrowParams.diemLimitCents);
+    const amountWei = BigInt(escrowParams.amountWei);
+    const durationSeconds = Number(escrowParams.durationSeconds);
+
+    const txCreate = await escrowContract.createEscrow(
+      escrowParams.providerAddress,
+      diemLimitCents,
+      amountWei,
+      durationSeconds
+    );
+    const receipt = await txCreate.wait();
+    const iface = new ethers.Interface(escrowAbi);
+    let escrowId = null;
+    for (const log of receipt.logs || []) {
+      if (log.address.toLowerCase() !== config.contractAddress.toLowerCase()) continue;
+      try {
+        const parsed = iface.parseLog({ topics: log.topics, data: log.data });
+        if (parsed && parsed.name === 'EscrowCreated') {
+          escrowId = parsed.args[0];
+          break;
+        }
+      } catch (_) {}
+    }
+    if (!escrowId) {
+      throw new DACNError('Could not read escrowId from EscrowCreated event', 'TX_ERROR', { receipt });
+    }
+    escrowId = typeof escrowId === 'string' ? escrowId : escrowId.toString();
+
+    const allowance = await usdc.allowance(buyerAddress, config.contractAddress);
+    if (allowance < amountWei) {
+      const approveTx = await usdc.approve(config.contractAddress, ethers.MaxUint256);
+      await approveTx.wait();
+    }
+
+    const fundTx = await escrowContract.fundEscrow(escrowId);
+    await fundTx.wait();
+
+    const totalDiemAmount = Math.floor(diemAmount);
+    const credit = await this.registerEscrow({
+      escrowId,
+      providerId,
+      buyerAddress,
+      totalDiemAmount,
+      durationDays: Math.floor(durationDays),
+    });
+    return credit;
   }
 
   /**

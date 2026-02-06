@@ -12,8 +12,8 @@ const mockReportUsage = jest.fn().mockResolvedValue({ hash: '0xusagetx123' });
 const mockGetEscrow = jest.fn().mockResolvedValue({
   provider: '0xProvider12345678901234567890123456789012',
   consumer: '0xConsumer1234567890123456789012345678901234',
-  amount: BigInt(4750000),
-  diemLimit: BigInt(5000),
+  amount: BigInt(95000),
+  diemLimit: BigInt(10),
   status: 2, // Active
   apiKeyHash: '0xkeyhash123',
   reportedUsage: BigInt(0),
@@ -79,69 +79,143 @@ describe('Credits API Integration (Escrow Flow)', () => {
   });
 
   describe('GET /api/credits/quote', () => {
-    it('should return price quote with fees', async () => {
+    it('should return price quote with fees and escrowParams', async () => {
       const response = await request(app)
-        .get(`/api/credits/quote?providerId=${providerId}&diemAmount=5000&durationDays=7`)
+        .get(`/api/credits/quote?providerId=${providerId}&diemAmount=0.1&durationDays=7`)
         .expect(200);
 
       expect(response.body.quote).toBeDefined();
-      expect(response.body.quote.diemAmount).toBe(5000);
+      expect(response.body.quote.diemAmount).toBe(0.1);
       expect(response.body.quote.platformFee).toBeDefined();
       expect(response.body.quote.totalCost).toBeDefined();
+      expect(response.body.quote.escrowParams).toBeDefined();
+      expect(response.body.quote.escrowParams.providerAddress).toBeDefined();
+      expect(response.body.quote.escrowParams.diemLimitCents).toBe(10);
+      expect(response.body.quote.escrowParams.durationSeconds).toBe(7 * 24 * 60 * 60);
     });
   });
 
-  describe('POST /api/credits/request (Step 1: Create Escrow)', () => {
-    it('should create escrow request', async () => {
+  describe('POST /api/credits/register', () => {
+    it('should register an escrow created and funded by buyer on-chain', async () => {
+      const buyerAddress = '0xB2e2123456789012345678901234567890123456';
+      const regEscrowId = '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
+      mockGetEscrow.mockResolvedValueOnce({
+        provider: testProvider.address,
+        consumer: buyerAddress,
+        amount: BigInt(95000),
+        diemLimit: BigInt(10),
+        status: 1,
+        apiKeyHash: '0x00',
+        reportedUsage: BigInt(0),
+        providerConfirmed: false,
+        consumerConfirmed: false
+      });
+
       const response = await request(app)
-        .post('/api/credits/request')
+        .post('/api/credits/register')
         .send({
+          escrowId: regEscrowId,
           providerId,
-          buyerAddress: '0xB2e2123456789012345678901234567890123456',
-          diemAmount: 5000,
+          buyerAddress,
+          totalDiemAmount: 5000,
           durationDays: 7
         })
         .expect(201);
 
       expect(response.body.credit).toBeDefined();
-      expect(response.body.credit.status).toBe('requested');
+      expect(response.body.credit.status).toBe('created');
+      expect(response.body.credit.escrowId).toBe(regEscrowId);
+      expect(response.body.credit.buyerAddress).toBe(buyerAddress);
+      expect(response.body.nextStep).toContain('deliver');
+    });
+
+    it('should return existing credit when escrow already registered', async () => {
+      const buyerAddress = '0xC3e3123456789012345678901234567890123456';
+      const regEscrowId = '0x9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba';
+      const escrowPayload = {
+        provider: testProvider.address,
+        consumer: buyerAddress,
+        amount: BigInt(95000),
+        diemLimit: BigInt(10),
+        status: 1,
+        apiKeyHash: '0x00',
+        reportedUsage: BigInt(0),
+        providerConfirmed: false,
+        consumerConfirmed: false
+      };
+      mockGetEscrow.mockResolvedValueOnce(escrowPayload).mockResolvedValueOnce(escrowPayload);
+
+      const first = await request(app)
+        .post('/api/credits/register')
+        .send({
+          escrowId: regEscrowId,
+          providerId,
+          buyerAddress,
+          totalDiemAmount: 0.1,
+          durationDays: 7
+        })
+        .expect(201);
+
+      const second = await request(app)
+        .post('/api/credits/register')
+        .send({
+          escrowId: regEscrowId,
+          providerId,
+          buyerAddress,
+          totalDiemAmount: 0.1,
+          durationDays: 7
+        })
+        .expect(200);
+
+      expect(second.body.credit.id).toBe(first.body.credit.id);
+      expect(second.body.message).toContain('already registered');
+    });
+  });
+
+  describe('POST /api/credits/request (Step 1: Create Escrow)', () => {
+    it('should create escrow and auto-fund', async () => {
+      const response = await request(app)
+        .post('/api/credits/request')
+        .send({
+          providerId,
+          buyerAddress: '0xB2e2123456789012345678901234567890123456',
+          diemAmount: 0.1,
+          durationDays: 7
+        })
+        .expect(201);
+
+      expect(response.body.credit).toBeDefined();
+      expect(response.body.credit.status).toBe('created');
       expect(response.body.escrowId).toBeDefined();
       expect(response.body.escrowId).toBe(escrowId);
-      expect(response.body.nextStep).toBe('fundEscrow');
-      
+      expect(response.body.nextStep).toContain('deliver');
       expect(mockCreateEscrow).toHaveBeenCalledWith(
         testProvider.address,
-        5000,
+        10,
         expect.any(BigInt),
         7 * 24 * 60 * 60
       );
+      expect(mockFundEscrow).toHaveBeenCalledWith(escrowId);
     });
   });
 
   describe('POST /api/credits/:id/fund (Step 2: Fund Escrow)', () => {
-    it('should fund escrow', async () => {
-      // First create
+    it('should return 400 when credit already auto-funded', async () => {
       const createRes = await request(app)
         .post('/api/credits/request')
         .send({
           providerId,
           buyerAddress: '0xB2e2123456789012345678901234567890123456',
-          diemAmount: 5000,
+          diemAmount: 0.1,
           durationDays: 7
         });
 
       const creditId = createRes.body.credit.id;
 
-      // Now fund
-      const response = await request(app)
+      await request(app)
         .post(`/api/credits/${creditId}/fund`)
         .send({ escrowId })
-        .expect(200);
-
-      expect(response.body.credit.status).toBe('created');
-      expect(response.body.txHash).toBeDefined();
-      
-      expect(mockFundEscrow).toHaveBeenCalledWith(escrowId);
+        .expect(400);
     });
 
     it('should reject funding without escrowId', async () => {
@@ -150,7 +224,7 @@ describe('Credits API Integration (Escrow Flow)', () => {
         .send({
           providerId,
           buyerAddress: '0xB2e2123456789012345678901234567890123456',
-          diemAmount: 5000,
+          diemAmount: 0.1,
           durationDays: 7
         });
 
@@ -164,58 +238,44 @@ describe('Credits API Integration (Escrow Flow)', () => {
   });
 
   describe('POST /api/credits/:id/deliver (Step 3: Deliver Key)', () => {
-    it('should deliver API key', async () => {
-      // Create and fund first
+    it('should deliver API key and allow mark-delivered', async () => {
       const createRes = await request(app)
         .post('/api/credits/request')
         .send({
           providerId,
           buyerAddress: '0xB2e2123456789012345678901234567890123456',
-          diemAmount: 5000,
+          diemAmount: 0.1,
           durationDays: 7
         });
       const creditId = createRes.body.credit.id;
 
-      await request(app)
-        .post(`/api/credits/${creditId}/fund`)
-        .send({ escrowId });
-
-      // Deliver
       const response = await request(app)
         .post(`/api/credits/${creditId}/deliver`)
-        .send({ escrowId, apiKey: 'test-api-key-123' })
+        .send({ escrowId })
         .expect(200);
 
-      expect(response.body.credit.status).toBe('key_delivered');
       expect(response.body.apiKey).toBeDefined();
-      expect(response.body.txHash).toBeDefined();
-      
-      expect(mockDeliverKey).toHaveBeenCalled();
+      expect(response.body.keyHash).toBeDefined();
+
+      await request(app).post(`/api/credits/${creditId}/mark-delivered`).expect(200);
     });
   });
 
   describe('POST /api/credits/:id/confirm (Step 4: Confirm Receipt)', () => {
     it('should confirm key receipt', async () => {
-      // Setup through deliver
       const createRes = await request(app)
         .post('/api/credits/request')
         .send({
           providerId,
           buyerAddress: '0xB2e2123456789012345678901234567890123456',
-          diemAmount: 5000,
+          diemAmount: 0.1,
           durationDays: 7
         });
       const creditId = createRes.body.credit.id;
 
-      await request(app)
-        .post(`/api/credits/${creditId}/fund`)
-        .send({ escrowId });
+      await request(app).post(`/api/credits/${creditId}/deliver`).send({ escrowId });
+      await request(app).post(`/api/credits/${creditId}/mark-delivered`);
 
-      await request(app)
-        .post(`/api/credits/${creditId}/deliver`)
-        .send({ escrowId, apiKey: 'test-api-key-123' });
-
-      // Confirm
       const response = await request(app)
         .post(`/api/credits/${creditId}/confirm`)
         .send({ escrowId })
@@ -227,36 +287,39 @@ describe('Credits API Integration (Escrow Flow)', () => {
 
   describe('POST /api/credits/:id/usage (Step 5: Report Usage)', () => {
     it('should report usage', async () => {
-      // Full setup
       const createRes = await request(app)
         .post('/api/credits/request')
         .send({
           providerId,
           buyerAddress: '0xB2e2123456789012345678901234567890123456',
-          diemAmount: 5000,
+          diemAmount: 0.1,
           durationDays: 7
         });
       const creditId = createRes.body.credit.id;
 
-      await request(app).post(`/api/credits/${creditId}/fund`).send({ escrowId });
-      await request(app).post(`/api/credits/${creditId}/deliver`).send({ escrowId, apiKey: 'key123' });
+      await request(app).post(`/api/credits/${creditId}/deliver`).send({ escrowId });
+      await request(app).post(`/api/credits/${creditId}/mark-delivered`);
       await request(app).post(`/api/credits/${creditId}/confirm`).send({ escrowId });
 
-      // Report usage
       const response = await request(app)
         .post(`/api/credits/${creditId}/usage`)
-        .send({ escrowId, usageAmount: 3500 })
+        .send({ escrowId, usageAmount: 10 })
         .expect(200);
 
-      expect(response.body.credit.actualUsage).toBe(3500);
+      expect(response.body.credit.actualUsage).toBe(10);
       expect(response.body.txHash).toBeDefined();
-      
-      expect(mockReportUsage).toHaveBeenCalledWith(escrowId, 3500);
+      expect(mockReportUsage).toHaveBeenCalledWith(escrowId, 10);
     });
 
     it('should auto-complete if both parties confirmed', async () => {
       mockGetEscrow.mockResolvedValueOnce({
-        status: 3, // Completed
+        provider: '0xProvider12345678901234567890123456789012',
+        consumer: '0xConsumer1234567890123456789012345678901234',
+        amount: BigInt(4750000),
+        diemLimit: BigInt(5000),
+        status: 3,
+        apiKeyHash: '0xkeyhash123',
+        reportedUsage: BigInt(3500),
         providerConfirmed: true,
         consumerConfirmed: true
       });
@@ -266,18 +329,18 @@ describe('Credits API Integration (Escrow Flow)', () => {
         .send({
           providerId,
           buyerAddress: '0xB2e2123456789012345678901234567890123456',
-          diemAmount: 5000,
+          diemAmount: 0.1,
           durationDays: 7
         });
       const creditId = createRes.body.credit.id;
 
-      await request(app).post(`/api/credits/${creditId}/fund`).send({ escrowId });
-      await request(app).post(`/api/credits/${creditId}/deliver`).send({ escrowId, apiKey: 'key123' });
+      await request(app).post(`/api/credits/${creditId}/deliver`).send({ escrowId });
+      await request(app).post(`/api/credits/${creditId}/mark-delivered`);
       await request(app).post(`/api/credits/${creditId}/confirm`).send({ escrowId });
 
       const response = await request(app)
         .post(`/api/credits/${creditId}/usage`)
-        .send({ escrowId, usageAmount: 3500 });
+        .send({ escrowId, usageAmount: 10 });
 
       expect(response.body.status).toBe('completed');
     });
@@ -285,15 +348,18 @@ describe('Credits API Integration (Escrow Flow)', () => {
 
   describe('POST /api/credits/:id/cancel', () => {
     it('should cancel before funding', async () => {
+      mockFundEscrow.mockRejectedValueOnce(new Error('fund failed'));
+
       const createRes = await request(app)
         .post('/api/credits/request')
         .send({
           providerId,
           buyerAddress: '0xB2e2123456789012345678901234567890123456',
-          diemAmount: 5000,
+          diemAmount: 0.1,
           durationDays: 7
         });
 
+      expect(createRes.body.credit.status).toBe('requested');
       const response = await request(app)
         .post(`/api/credits/${createRes.body.credit.id}/cancel`)
         .expect(200);
@@ -307,12 +373,10 @@ describe('Credits API Integration (Escrow Flow)', () => {
         .send({
           providerId,
           buyerAddress: '0xB2e2123456789012345678901234567890123456',
-          diemAmount: 5000,
+          diemAmount: 0.1,
           durationDays: 7
         });
       const creditId = createRes.body.credit.id;
-
-      await request(app).post(`/api/credits/${creditId}/fund`).send({ escrowId });
 
       const response = await request(app)
         .post(`/api/credits/${creditId}/cancel`);

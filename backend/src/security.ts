@@ -47,14 +47,20 @@ export function runSecurityChecks(): void {
   // Check 4: CORS
   if (config.server.env === 'development') {
     console.log('   ✓ CORS restricted to localhost in development\n');
+  } else {
+    const origins = process.env.CORS_ORIGINS?.split(',').map((o) => o.trim()).filter(Boolean) || [];
+    if (origins.length === 0) {
+      console.warn('⚠️  DEPLOYMENT REMINDER: Set CORS_ORIGINS in production (comma-separated frontend URLs).');
+      console.warn('   Example: CORS_ORIGINS=https://app.example.com\n');
+    }
   }
-  
+
   console.log('🔒 Security checks complete\n');
 }
 
 export function getCorsOrigins(): string[] {
   if (config.server.env === 'production') {
-    const origins = process.env.CORS_ORIGINS?.split(',') || [];
+    const origins = (process.env.CORS_ORIGINS?.split(',') || []).map((o) => o.trim()).filter(Boolean);
     if (origins.length === 0) {
       console.warn('⚠️  No CORS_ORIGINS set in production! Blocking all cross-origin requests.\n');
     }
